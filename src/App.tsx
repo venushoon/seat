@@ -116,46 +116,6 @@ export default function App() {
   const total = students.length
   const capacityNote = capacity < total ? `⚠️ 자리(${capacity}) < 학생(${total})` : capacity > total ? `남는 자리: ${capacity - total}` : '정확히 맞음'
 
-  // ===== DnD =====
-  const dragId = useRef<string | null>(null)
-  const onDragStart = (id: string) => (e: React.DragEvent) => { dragId.current = id; e.dataTransfer.setData('text/plain', id) }
-  const onDropToGroup = (gidx: number) => (e: React.DragEvent) => {
-    e.preventDefault()
-    const id = e.dataTransfer.getData('text/plain') || dragId.current
-    if (!id) return
-
-    const st =
-      students.find(s => s.id === id) ||
-      groups.flatMap(g => g.students).find(s => s.id === id)
-    if (!st) return
-
-    // 남여섞기OFF: 수동 드롭에서도 성별 규칙 강제
-    if (mode === '남여섞기OFF') {
-      if (st.gender === '미정') return
-      const g = groups[gidx]
-      const gSet = new Set(g.students.map(s => s.gender))
-      if (gSet.has('남') && gSet.has('여')) return
-      if (gSet.size > 0) {
-        const gGender: Gender = gSet.has('남') ? '남' : gSet.has('여') ? '여' : '미정'
-        if (gGender !== st.gender) return
-      }
-      if (g.students.length >= maxPerGroup) return
-    }
-
-    let moved: Student | null = null
-    setGroups(prev => prev.map(g => ({ ...g, students: g.students.filter(s => { if (s.id === id) { moved = s; return false } return true }) })))
-    setStudents(prev => prev.filter(s => { if (s.id === id) { moved = s; return false } return true }))
-    setGroups(prev => {
-      if (!moved) return prev
-      const clone = [...prev]
-      if (clone[gidx].students.find(s => s.id === moved!.id)) return clone
-      if (clone[gidx].students.length >= maxPerGroup) return clone
-      clone[gidx] = { ...clone[gidx], students: [...clone[gidx].students, moved!] }
-      return clone
-    })
-    dragId.current = null
-  }
-
   // ===== 유틸 =====
   function* cycle(arr: number[]) { let k = 0; while (true) yield arr[k++ % arr.length] }
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -175,13 +135,6 @@ export default function App() {
   const nameOf = (id: string) => students.find(s => s.id === id)?.name || '(이름없음)'
 
   // ===== 성별 규칙/제약 헬퍼 =====
-  const isLocked = (id: string) => {
-    for (const g of groups) {
-      const st = g.students.find(s => s.id === id)
-      if (st?.locked) return true
-    }
-    return students.find(s => s.id === id)?.locked ?? false
-  }
   const groupGenderOf = (g: Group): Gender | '혼합' | '비어있음' => {
     if (g.students.length === 0) return '비어있음'
     const set = new Set(g.students.map(s => s.gender))
@@ -201,54 +154,46 @@ export default function App() {
   }
   const findGroupIdxOf = (gs: Group[], id: string) => gs.findIndex(g => g.students.some(s => s.id === id))
 
-  function tryMove(gs: Group[], stuId: string, toIdx: number): boolean {
-    if (isLocked(stuId)) return false
-    const fromIdx = findGroupIdxOf(gs, stuId)
-    if (fromIdx === -1 || fromIdx === toIdx) return false
-    const to = gs[toIdx]
-    const st = gs[fromIdx].students.find(s => s.id === stuId)!
-    if (!canAddTo(to, st)) return false
-    const from = gs[fromIdx]
-    gs[fromIdx] = { ...from, students: from.students.filter(s => s.id !== stuId) }
-    gs[toIdx] = { ...to, students: [...to.students, st] }
-    return true
-  }
-  function trySwap(gs: Group[], aId: string, bId: string): boolean {
-    if (isLocked(aId) || isLocked(bId)) return false
-    const ai = findGroupIdxOf(gs, aId), bi = findGroupIdxOf(gs, bId)
-    if (ai === -1 || bi === -1 || ai === bi) return false
-    const ga = gs[ai], gb = gs[bi]
-    const a = ga.students.find(s => s.id === aId)!, b = gb.students.find(s => s.id === bId)!
-    if (mode === '남여섞기OFF') {
-      const gaAfter = { ...ga, students: ga.students.map(s => s.id === aId ? b : s) }
-      const gbAfter = { ...gb, students: gb.students.map(s => s.id === bId ? a : s) }
-      const ok = (g: Group) => groupGenderOf(g) !== '혼합'
-      if (!ok(gaAfter) || !ok(gbAfter)) return false
-    }
-    gs[ai] = { ...ga, students: ga.students.map(s => s.id === aId ? b : s) }
-    gs[bi] = { ...gb, students: gb.students.map(s => s.id === bId ? a : s) }
-    return true
+  // === 빠른 수동 배치 & 중복 방지: 단일 setGroups에서 제거→추가 원자 처리 ===
+  function assignToGroup(stuId: string, gidx: number) {
+    const st: Student | undefined =
+      students.find(s => s.id === stuId) ||
+      groups.flatMap(g => g.students).find(s => s.id === stuId)
+    if (!st) return
+
+    setGroups(prev => {
+      if (gidx < 0 || gidx >= prev.length) return prev
+      // 1) 모든 그룹에서 해당 학생 제거
+      let fromIdx = -1
+      const stripped = prev.map((g, i) => {
+        const exists = g.students.some(s => s.id === stuId)
+        if (exists) fromIdx = i
+        return { ...g, students: g.students.filter(s => s.id !== stuId) }
+      })
+      // 같은 그룹으로 이동 요청이면 그대로 반환
+      if (fromIdx === gidx) return prev
+
+      const target = stripped[gidx]
+      // 2) 규칙 검사는 제거 후 상태 기준으로 수행
+      if (!canAddTo(target, st)) return prev
+      if (target.students.some(s => s.id === stuId)) return stripped // 혹시 모를 중복 방지
+      // 3) 추가
+      stripped[gidx] = { ...target, students: [...target.students, st] }
+      return stripped
+    })
+    // 미배치 목록에서 제거
+    setStudents(ss => ss.filter(x => x.id !== stuId))
   }
 
-  // === 빠른 수동 배치: 모둠 번호로 즉시 이동 ===
-  function assignToGroup(stuId: string, gidx: number) {
-    // 학생 찾기
-    let st: Student | undefined = students.find(s => s.id === stuId)
-    if (st) {
-      setStudents(ss => ss.filter(x => x.id !== stuId))
-    } else {
-      const fromIdx = groups.findIndex(g => g.students.some(s => s.id === stuId))
-      if (fromIdx >= 0) {
-        st = groups[fromIdx].students.find(s => s.id === stuId)
-        setGroups(gs => gs.map((g, i) => i === fromIdx ? { ...g, students: g.students.filter(s => s.id !== stuId) } : g))
-      }
-    }
-    if (!st) return
-    const target = groups[gidx]
-    if (!target) { alert('존재하지 않는 모둠 번호입니다.'); if (!placedIds.has(stuId)) setStudents(ss => [...ss, st!]); return }
-    if (target.students.length >= maxPerGroup) { alert('해당 모둠 정원이 가득 찼습니다.'); if (!placedIds.has(stuId)) setStudents(ss => [...ss, st!]); return }
-    if (!canAddTo(target, st)) { alert('해당 모둠 규칙(성별/혼합 금지 등)에 맞지 않습니다.'); if (!placedIds.has(stuId)) setStudents(ss => [...ss, st!]); return }
-    setGroups(gs => gs.map((g, i) => i === gidx ? { ...g, students: [...g.students, st!] } : g))
+  // ===== DnD (드롭도 원자 처리로 수정) =====
+  const onDragStart = (id: string) => (e: React.DragEvent) => {
+    e.dataTransfer.setData('text/plain', id)
+  }
+  const onDropToGroup = (gidx: number) => (e: React.DragEvent) => {
+    e.preventDefault()
+    const id = e.dataTransfer.getData('text/plain')
+    if (!id) return
+    assignToGroup(id, gidx) // 동일 원자 로직 사용
   }
 
   // ===== 배치 알고리즘 =====
@@ -277,9 +222,9 @@ export default function App() {
     const lockedCounts = nextGroups.map(g => g.students.length)
     const targets = Array(gc).fill(0).map((_,i)=>Math.max(minG, Math.min(maxG, lockedCounts[i])))
     let sumTargets = targets.reduce((a,b)=>a+b,0)
-    while (sumTargets < Math.min(totalNow, gc*maxG)) {
+    while (sumTargets < Math.min(totalNow, gc*maxPerGroup)) {
       let changed = false
-      for (let i = 0; i < gc && sumTargets < Math.min(totalNow, gc*maxG); i++) {
+      for (let i = 0; i < gc && sumTargets < Math.min(totalNow, gc*maxPerGroup); i++) {
         if (targets[i] < maxPerGroup) { targets[i]++; sumTargets++; changed = true }
       }
       if (!changed) break
@@ -339,18 +284,13 @@ export default function App() {
     } else if (mode === '성비균형') {
       const totalPool = males.length + females.length + others.length
       const maleRatio = totalPool ? males.length / totalPool : 0.5
-
-      // 각 그룹의 남학생 목표 수: 해밀턴 라운딩
       const rawMaleTargets = targets.map(t => t * maleRatio)
       const maleTargets = hamiltonRound(rawMaleTargets, Math.min(males.length, targets.reduce((a,b)=>a+b,0)))
-
       const counts = nextGroups.map(g => ({
         m: g.students.filter(s => s.gender === '남').length,
         f: g.students.filter(s => s.gender === '여').length,
         o: g.students.filter(s => s.gender === '미정').length,
       }))
-
-      // 남학생 우선
       for (let idx of cyc(order)) {
         while (canPut(idx) && males.length && counts[idx].m < maleTargets[idx]) {
           const st = males[0]
@@ -358,8 +298,6 @@ export default function App() {
         }
         if (!order.some(i => counts[i].m < maleTargets[i] && canPut(i))) break
       }
-
-      // 여/미정 채우기
       for (let idx of cyc(order)) {
         while (canPut(idx) && (females.length || others.length)) {
           let st: Student | undefined
@@ -370,8 +308,6 @@ export default function App() {
         }
         if (!order.some(i => canPut(i) && (females.length || others.length))) break
       }
-
-      // 가벼운 후처리 스왑
       for (let gi = 0; gi < gc; gi++) {
         const need = maleTargets[gi] - counts[gi].m
         if (need === 0) continue
@@ -379,8 +315,13 @@ export default function App() {
           for (let gj = 0; gj < gc && counts[gi].m < maleTargets[gi]; gj++) if (gj !== gi) {
             const donor = nextGroups[gj].students.find(s => s.gender === '남' && !s.locked)
             const receiver = nextGroups[gi].students.find(s => s.gender !== '남' && !s.locked)
-            if (donor && receiver) {
-              trySwap(nextGroups, receiver.id, donor.id)
+            if (donor && receiver) { // 교환
+              const ai = nextGroups[gi].students.findIndex(s => s.id === receiver.id)
+              const bi = nextGroups[gj].students.findIndex(s => s.id === donor.id)
+              const A = nextGroups[gi], B = nextGroups[gj]
+              const aArr = [...A.students]; const bArr = [...B.students]
+              aArr[ai] = donor; bArr[bi] = receiver
+              nextGroups[gi] = { ...A, students: aArr }; nextGroups[gj] = { ...B, students: bArr }
               counts[gi].m++; counts[gj].m--
             }
           }
@@ -389,7 +330,12 @@ export default function App() {
             const donor = nextGroups[gi].students.find(s => s.gender === '남' && !s.locked)
             const receiver = nextGroups[gj].students.find(s => s.gender !== '남' && !s.locked)
             if (donor && receiver) {
-              trySwap(nextGroups, donor.id, receiver.id)
+              const ai = nextGroups[gi].students.findIndex(s => s.id === donor.id)
+              const bi = nextGroups[gj].students.findIndex(s => s.id === receiver.id)
+              const A = nextGroups[gi], B = nextGroups[gj]
+              const aArr = [...A.students]; const bArr = [...B.students]
+              aArr[ai] = receiver; bArr[bi] = donor
+              nextGroups[gi] = { ...A, students: aArr }; nextGroups[gj] = { ...B, students: bArr }
               counts[gi].m--; counts[gj].m++
             }
           }
@@ -421,13 +367,27 @@ export default function App() {
         const b = nextGroups[bi].students.find(s => s.id === p.bId)!
         if (mode === '남여섞기OFF' && a.gender !== '미정' && b.gender !== '미정' && a.gender !== b.gender) continue
 
-        if (canAddTo(nextGroups[bi], a)) { tryMove(nextGroups, p.aId, bi) }
-        else if (canAddTo(nextGroups[ai], b)) { tryMove(nextGroups, p.bId, ai) }
-        else {
-          const candA = nextGroups[ai].students.find(s => !isLocked(s.id) && s.id !== p.aId)
-          const candB = nextGroups[bi].students.find(s => !isLocked(s.id) && s.id !== p.bId)
-          if (candA && trySwap(nextGroups, candA.id, p.bId)) { /* ok */ }
-          else if (candB && trySwap(nextGroups, p.aId, candB.id)) { /* ok */ }
+        // 간단 이동 또는 교환
+        const canB = nextGroups[ai].students.length > 0
+        if (canAddTo(nextGroups[bi], a)) {
+          const from = ai
+          nextGroups[from] = { ...nextGroups[from], students: nextGroups[from].students.filter(s => s.id !== a.id) }
+          nextGroups[bi] = { ...nextGroups[bi], students: [...nextGroups[bi].students, a] }
+        } else if (canAddTo(nextGroups[ai], b)) {
+          const from = bi
+          nextGroups[from] = { ...nextGroups[from], students: nextGroups[from].students.filter(s => s.id !== b.id) }
+          nextGroups[ai] = { ...nextGroups[ai], students: [...nextGroups[ai].students, b] }
+        } else {
+          const candA = nextGroups[ai].students.find(s => !s.locked && s.id !== a.id)
+          const candB = nextGroups[bi].students.find(s => !s.locked && s.id !== b.id)
+          if (candA && candB) {
+            const aiA = nextGroups[ai].students.findIndex(s => s.id === candA.id)
+            const biB = nextGroups[bi].students.findIndex(s => s.id === b.id)
+            const A = nextGroups[ai], B = nextGroups[bi]
+            const aArr = [...A.students]; const bArr = [...B.students]
+            aArr[aiA] = b; bArr[biB] = candA
+            nextGroups[ai] = { ...A, students: aArr }; nextGroups[bi] = { ...B, students: bArr }
+          }
         }
       }
       // 떼기
@@ -435,14 +395,28 @@ export default function App() {
         const ai = findGroupIdxOf(nextGroups, p.aId), bi = findGroupIdxOf(nextGroups, p.bId)
         if (ai === -1 || bi === -1 || ai !== bi) continue
         const toOrder = shuffleArray(Array.from({ length: groupCount }, (_, i) => i).filter(i => i !== ai))
-        let done = false
+        let moved = false
         for (const ti of toOrder) {
-          if (tryMove(nextGroups, p.bId, ti)) { done = true; break }
+          const b = nextGroups[ai].students.find(s => s.id === p.bId)!
+          if (canAddTo(nextGroups[ti], b)) {
+            nextGroups[ai] = { ...nextGroups[ai], students: nextGroups[ai].students.filter(s => s.id !== b.id) }
+            nextGroups[ti] = { ...nextGroups[ti], students: [...nextGroups[ti].students, b] }
+            moved = true; break
+          }
         }
-        if (!done) {
+        if (!moved) {
           for (const ti of toOrder) {
-            const cand = nextGroups[ti].students.find(s => !isLocked(s.id))
-            if (cand && trySwap(nextGroups, p.bId, cand.id)) { done = true; break }
+            const cand = nextGroups[ti].students.find(s => !s.locked)
+            const b = nextGroups[ai].students.find(s => s.id === p.bId)!
+            if (cand && canAddTo(nextGroups[ai], cand)) {
+              const aiB = nextGroups[ai].students.findIndex(s => s.id === b.id)
+              const tiC = nextGroups[ti].students.findIndex(s => s.id === cand.id)
+              const A = nextGroups[ai], T = nextGroups[ti]
+              const aArr = [...A.students]; const tArr = [...T.students]
+              aArr[aiB] = cand; tArr[tiC] = b
+              nextGroups[ai] = { ...A, students: aArr }; nextGroups[ti] = { ...T, students: tArr }
+              break
+            }
           }
         }
       }
@@ -493,7 +467,14 @@ export default function App() {
     reader.readAsText(file); ev.currentTarget.value = ''
   }
 
+  // ===== DnD 시작 핸들러(표/칩 공용) =====
+  const startDrag = (id: string) => (e: React.DragEvent) => {
+    e.dataTransfer.setData('text/plain', id)
+  }
+
   // ===== UI =====
+  const placedIds = useMemo(() => new Set(groups.flatMap(g => g.students.map(s => s.id))), [groups])
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white print:bg-white">
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b print:hidden">
@@ -677,7 +658,6 @@ export default function App() {
               <div className="grid md:grid-cols-3 gap-3 mb-3">
                 <textarea value={bulk} onChange={(e)=>setBulk(e.target.value)}
                   placeholder={"여러 줄 붙여넣기 예)\n김철수/남\n이영희/여\n박민수 남"} className="input md:col-span-2 h-24" />
-                {/* 강조 색상으로 변경 */}
                 <button onClick={applyBulk} className="btn-accent">붙여넣기 추가</button>
               </div>
 
@@ -690,9 +670,7 @@ export default function App() {
                         <th className="p-2">이름</th>
                         <th className="p-2 w-28">성별</th>
                         <th className="p-2 w-28">상태</th>
-                        {/* 이동 컬럼 */}
                         <th className="p-2 w-24">이동</th>
-                        {/* 액션 */}
                         <th className="p-2 w-28"></th>
                       </tr>
                     </thead>
@@ -702,17 +680,13 @@ export default function App() {
                         return (
                           <tr key={s.id} className={`border-t ${placed ? 'bg-indigo-50/35' : ''}`}>
                             <td className="p-2 text-slate-500">{i + 1}</td>
-                            <td className="p-2">
-                              <input value={s.name} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, name:e.target.value}:x))} className="input" placeholder="이름" />
-                            </td>
+                            <td className="p-2"><input value={s.name} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, name:e.target.value}:x))} className="input" placeholder="이름" /></td>
                             <td className="p-2">
                               <select value={s.gender} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, gender:e.target.value as Gender}:x))} className="input">
                                 <option value="미정">미정</option><option value="남">남</option><option value="여">여</option>
                               </select>
                             </td>
                             <td className="p-2"><span className={`inline-flex items-center gap-1 ${placed ? 'text-indigo-700' : 'text-slate-600'}`}>{placed ? '배치됨' : '미배치'}</span></td>
-
-                            {/* ▼ 빠른 이동(번호 선택) */}
                             <td className="p-2">
                               <select
                                 className="input input-xs"
@@ -731,11 +705,10 @@ export default function App() {
                                 ))}
                               </select>
                             </td>
-
                             <td className="p-2 text-right">
                               <button onClick={()=>toggleLock(s.id)} className={`icon-btn ${s.locked?'text-amber-600':'text-slate-500'}`} title="고정">{s.locked ? <Lock className="w-4 h-4"/> : <Unlock className="w-4 h-4"/>}</button>
                               <button onClick={()=>removeStudent(s.id)} className="icon-btn text-rose-600" title="삭제"><Trash2 className="w-4 h-4"/></button>
-                              <button draggable onDragStart={onDragStart(s.id)} className="icon-btn" title="드래그하여 모둠으로 이동">↔︎</button>
+                              <button draggable onDragStart={startDrag(s.id)} className="icon-btn" title="드래그하여 모둠으로 이동">↔︎</button>
                             </td>
                           </tr>
                         )
@@ -767,13 +740,13 @@ export default function App() {
                       className={`min-h-[120px] grid grid-cols-1 gap-2 p-2 rounded-xl border-2 ${g.students.length<maxPerGroup?'border-dashed border-slate-300':'border-slate-200'}`}>
                       {g.students.map((s) => (
                         <motion.div key={s.id} layout className={`rounded-xl border bg-white shadow-sm ${s.locked ? 'ring-2 ring-amber-400' : ''}`}>
-                          <div className="flex items-center justify-between px-3 py-2 rounded-xl" draggable onDragStart={onDragStart(s.id)} title="드래그하여 다른 모둠으로 이동">
+                          <div className="flex items-center justify-between px-3 py-2 rounded-xl" draggable onDragStart={startDrag(s.id)} title="드래그하여 다른 모둠으로 이동">
                             <div className="flex items-center gap-2">
                               <span className={`px-2 py-0.5 rounded-full text-xs ${s.gender==='남' ? 'bg-blue-100 text-blue-700' : s.gender==='여' ? 'bg-pink-100 text-pink-700' : 'bg-slate-100 text-slate-700'}`}>{s.gender}</span>
                               <span className="font-medium text-slate-800">{s.name || '(이름)'}</span>
                             </div>
                             <div className="flex items-center gap-1">
-                              {/* ▼ 모둠 카드 안에서도 번호 선택 이동 */}
+                              {/* 모둠 안 퀵 이동 */}
                               <select
                                 className="input input-xxs"
                                 defaultValue=""
@@ -791,7 +764,6 @@ export default function App() {
                                   </option>
                                 ))}
                               </select>
-
                               <button onClick={()=>toggleLock(s.id)} className={`icon-btn ${s.locked?'text-amber-600':'text-slate-500'}`} title="고정">{s.locked ? <Lock className="w-4 h-4"/> : <Unlock className="w-4 h-4"/>}</button>
                               <button onClick={()=>moveOut(s.id)} className="icon-btn text-slate-600" title="미배치로 이동">↩︎</button>
                             </div>
@@ -817,7 +789,6 @@ export default function App() {
           .btn-lg{ padding:.7rem 1rem; font-size:1rem; }
           .btn-primary{ display:inline-flex; align-items:center; gap:.5rem; padding:.6rem 1rem; border-radius:1rem; background:var(--blue); color:#fff; font-weight:700; letter-spacing:.01em; }
           .btn-ghost{ display:inline-flex; align-items:center; gap:.5rem; padding:.6rem .9rem; border-radius:1rem; color:#334155; background:transparent; border:1px solid rgba(148,163,184,.35); }
-          /* 강조색 버튼(붙여넣기 추가) */
           .btn-accent{ display:inline-flex; align-items:center; justify-content:center; gap:.5rem; padding:.6rem .9rem; border-radius:1rem; font-weight:800; background:linear-gradient(135deg,#34d399,#10b981); color:white; border:1px solid #a7f3d0; box-shadow:0 6px 14px -6px rgba(16,185,129,.4); }
           .icon-left{ width:1rem; height:1rem; margin-right:.1rem; }
           .input{ width:100%; padding:.55rem .75rem; border:1px solid rgb(226,232,240); border-radius:.85rem; background:#fff; }
