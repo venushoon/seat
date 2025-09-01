@@ -6,7 +6,6 @@ import {
 } from 'lucide-react'
 import type { Group, Student, Gender, Mode } from './lib/types'
 
-/** 친구/떼기 제약 */
 type Pair = { aId: string; bId: string }
 
 const gid = () => Math.random().toString(36).slice(2, 9)
@@ -29,6 +28,19 @@ function parseBulk(text: string): Student[] {
       const gender = (m?.[2] as Gender) || '미정'
       return { id: gid(), name, gender, locked: false } as Student
     })
+}
+
+/** 해밀턴 라운딩: 목표 합을 정확히 맞추도록 floor 후 큰 소수부 순으로 +1 배분 */
+function hamiltonRound(values: number[], totalTarget: number): number[] {
+  const floors = values.map(Math.floor)
+  let sum = floors.reduce((a,b)=>a+b,0)
+  const fracts = values.map((v,i)=>({i, frac: v - Math.floor(v)})).sort((a,b)=>b.frac - a.frac)
+  const out = [...floors]
+  let idx = 0
+  while (sum < totalTarget && idx < fracts.length) {
+    out[fracts[idx].i]++; sum++; idx++
+  }
+  return out
 }
 
 export default function App() {
@@ -119,10 +131,10 @@ export default function App() {
 
     // 남여섞기OFF: 수동 드롭에서도 성별 규칙 강제
     if (mode === '남여섞기OFF') {
-      if (st.gender === '미정') return // 미정은 수동도 금지(명시적 지정 필요)
+      if (st.gender === '미정') return
       const g = groups[gidx]
       const gSet = new Set(g.students.map(s => s.gender))
-      if (gSet.has('남') && gSet.has('여')) return // 이미 혼합 → 차단
+      if (gSet.has('남') && gSet.has('여')) return
       if (gSet.size > 0) {
         const gGender: Gender = gSet.has('남') ? '남' : gSet.has('여') ? '여' : '미정'
         if (gGender !== st.gender) return
@@ -208,14 +220,10 @@ export default function App() {
     const ga = gs[ai], gb = gs[bi]
     const a = ga.students.find(s => s.id === aId)!, b = gb.students.find(s => s.id === bId)!
     if (mode === '남여섞기OFF') {
-      // 교환 후 두 그룹 모두 단일 성별 유지해야 함
       const gaAfter = { ...ga, students: ga.students.map(s => s.id === aId ? b : s) }
       const gbAfter = { ...gb, students: gb.students.map(s => s.id === bId ? a : s) }
-      const good = (g: Group) => {
-        const gg = groupGenderOf(g)
-        return gg !== '혼합'
-      }
-      if (!good(gaAfter) || !good(gbAfter)) return false
+      const ok = (g: Group) => groupGenderOf(g) !== '혼합'
+      if (!ok(gaAfter) || !ok(gbAfter)) return false
     }
     gs[ai] = { ...ga, students: ga.students.map(s => s.id === aId ? b : s) }
     gs[bi] = { ...gb, students: gb.students.map(s => s.id === bId ? a : s) }
@@ -243,27 +251,34 @@ export default function App() {
     const alreadyPlaced = new Set(nextGroups.flatMap(g => g.students.map(s => s.id)))
     students.forEach(s => { if (!lockedIds.has(s.id) && !alreadyPlaced.has(s.id)) pool.push(s) })
 
-    // 2) 타깃 인원 계산
+    // 2) 그룹 타깃 인원(최소/최대 + 공평 분배)
     const totalNow = lockedIds.size + pool.length
     const lockedCounts = nextGroups.map(g => g.students.length)
-    const targets = Array.from({ length: gc }, (_, i) => Math.min(maxG, Math.max(minG, lockedCounts[i] || 0)))
-    let sumTargets = targets.reduce((a, b) => a + b, 0)
-    if (sumTargets > totalNow) {
-      let needReduce = sumTargets - totalNow, idx = 0
-      const floors = targets.map((_, i) => Math.max(minG, lockedCounts[i] || 0))
-      while (needReduce > 0) { if (targets[idx] > floors[idx]) { targets[idx]--; needReduce-- } idx = (idx + 1) % gc }
-      sumTargets = totalNow
+    // 기본 타깃 = minG로 채우고, 남는 좌석을 +1씩 분배(상한까지)
+    const targets = Array(gc).fill(0).map((_,i)=>Math.max(minG, Math.min(maxG, lockedCounts[i])))
+    let sumTargets = targets.reduce((a,b)=>a+b,0)
+    // 먼저 잠금 때문에 min보다 작은 그룹을 min까지 끌어올림(위에서 이미 반영됨)
+    // 남는 좌석을 공평 +1 분배하되 총학생수 초과 금지
+    while (sumTargets < Math.min(totalNow, gc*maxG)) {
+      let changed = false
+      for (let i = 0; i < gc && sumTargets < Math.min(totalNow, gc*maxG); i++) {
+        if (targets[i] < maxG) { targets[i]++; sumTargets++; changed = true }
+      }
+      if (!changed) break
     }
-    if (sumTargets < totalNow) {
-      let toAdd = totalNow - sumTargets, idx = 0
-      while (toAdd > 0) { if (targets[idx] < maxG) { targets[idx]++; toAdd-- } idx = (idx + 1) % gc }
+    // 만약 sumTargets > totalNow면 높은 그룹부터 -1
+    while (sumTargets > totalNow) {
+      let i = targets.indexOf(Math.max(...targets))
+      if (i === -1) break
+      if (targets[i] > Math.max(minG, lockedCounts[i])) { targets[i]--; sumTargets-- } else break
     }
 
     // 3) 풀 분해
-    const males = shuffleArray(pool.filter(s => s.gender === '남'))
-    const females = shuffleArray(pool.filter(s => s.gender === '여'))
-    const others = shuffleArray(pool.filter(s => s.gender === '미정'))
+    let males = shuffleArray(pool.filter(s => s.gender === '남'))
+    let females = shuffleArray(pool.filter(s => s.gender === '여'))
+    let others = shuffleArray(pool.filter(s => s.gender === '미정'))
     const order = shuffleArray(Array.from({ length: gc }, (_, i) => i))
+
     const canPut = (idx: number) => nextGroups[idx].students.length < targets[idx]
     const put = (idx: number, st: Student) => {
       if (!canPut(idx)) return false
@@ -275,7 +290,7 @@ export default function App() {
 
     // 4) 모드별 배치
     if (mode === '남여섞기OFF') {
-      // 잠금으로 이미 혼합된 그룹은 "추가 금지"
+      // 단일 성별 모둠
       const lockState: ('unset' | Gender | 'blocked')[] = nextGroups.map(g => {
         const gg = groupGenderOf(g)
         if (gg === '혼합') return 'blocked'
@@ -302,37 +317,85 @@ export default function App() {
           if (!anySpace) break
         }
       }
-      // 많은 쪽부터 채워 빈 그룹의 성별을 먼저 잠금
       if (males.length >= females.length) { fillGender(males, '남'); fillGender(females, '여') }
       else { fillGender(females, '여'); fillGender(males, '남') }
-      // others(미정) 자동 배치하지 않음 → 미배치
+      // others(미정) 자동 배치 안 함
     } else if (mode === '성비균형') {
+      // === 안정화된 성비 균형 ===
       const totalPool = males.length + females.length + others.length
       const maleRatio = totalPool ? males.length / totalPool : 0.5
-      const targetMale = targets.map(t => Math.round(t * maleRatio))
+
+      // 각 그룹 목표 남학생 수 = 해밀턴 라운딩(targets * maleRatio)
+      const rawMaleTargets = targets.map(t => t * maleRatio)
+      const maleTargets = hamiltonRound(rawMaleTargets, Math.min(males.length, targets.reduce((a,b)=>a+b,0)))
+
+      // 현재(잠금 포함) 카운트
       const counts = nextGroups.map(g => ({
         m: g.students.filter(s => s.gender === '남').length,
         f: g.students.filter(s => s.gender === '여').length,
-        o: g.students.filter(s => s.gender === '미정').length
+        o: g.students.filter(s => s.gender === '미정').length,
       }))
-      outer: for (let idx of cyc(order)) {
-        while (canPut(idx)) {
-          let chosen: Student | undefined
-          if (males.length && counts[idx].m < targetMale[idx]) { chosen = males.shift(); counts[idx].m++ }
-          else if (females.length) { chosen = females.shift(); counts[idx].f++ }
-          else if (others.length) { chosen = others.shift(); counts[idx].o++ }
-          else break outer
-          if (chosen) put(idx, chosen)
+
+      // 남자 우선 채우기 → 목표 초과 금지
+      for (let idx of cyc(order)) {
+        while (canPut(idx) && males.length && counts[idx].m < maleTargets[idx]) {
+          const st = males[0]
+          if (put(idx, st)) { males.shift(); counts[idx].m++ } else break
+        }
+        // 모든 그룹이 남목표를 달성했는지 체크
+        if (!order.some(i => counts[i].m < maleTargets[i] && canPut(i))) break
+      }
+
+      // 그 다음 여학생 채우기(잔여 자리), 부족하면 미정
+      for (let idx of cyc(order)) {
+        while (canPut(idx) && (females.length || others.length)) {
+          let st: Student | undefined
+          if (females.length) st = females.shift()!
+          else if (others.length) st = others.shift()!
+          if (!st) break
+          if (!put(idx, st)) break
+        }
+        if (!order.some(i => canPut(i) && (females.length || others.length))) break
+      }
+
+      // 후처리: 남목표 과/미달 최소화 스왑(가벼운 1패스)
+      for (let gi = 0; gi < gc; gi++) {
+        const need = maleTargets[gi] - counts[gi].m
+        if (need === 0) continue
+        if (need > 0) {
+          // 다른 그룹에서 남자 1명과 우리 그룹의 여자/미정을 스왑
+          for (let gj = 0; gj < gc && counts[gi].m < maleTargets[gi]; gj++) if (gj !== gi) {
+            const donor = nextGroups[gj].students.find(s => s.gender === '남' && !s.locked)
+            const receiver = nextGroups[gi].students.find(s => s.gender !== '남' && !s.locked)
+            if (donor && receiver) {
+              trySwap(nextGroups, receiver.id, donor.id)
+              // 카운트 갱신
+              if (donor && receiver) { counts[gi].m++; counts[gj].m-- }
+            }
+          }
+        } else if (need < 0) {
+          // 우리 그룹 남자 초과 → 다른 그룹의 여자/미정과 스왑
+          for (let gj = 0; gj < gc && counts[gi].m > maleTargets[gi]; gj++) if (gj !== gi) {
+            const donor = nextGroups[gi].students.find(s => s.gender === '남' && !s.locked)
+            const receiver = nextGroups[gj].students.find(s => s.gender !== '남' && !s.locked)
+            if (donor && receiver) {
+              trySwap(nextGroups, donor.id, receiver.id)
+              if (donor && receiver) { counts[gi].m--; counts[gj].m++ }
+            }
+          }
         }
       }
     } else {
       // 완전랜덤
       let all = shuffleArray([...males, ...females, ...others])
+      const stepsMax = targets.reduce((a,b)=>a+b,0) * 2
+      let steps = 0
       outer2: for (let idx of cyc(order)) {
+        if (steps++ > stepsMax) break
         while (canPut(idx) && all.length) {
           const st = all.shift()!
           if (put(idx, st)) { /* ok */ }
-          if (!all.length) break outer2
+          else continue outer2
         }
       }
     }
@@ -346,7 +409,6 @@ export default function App() {
         if (ai === -1 || bi === -1 || ai === bi) continue
         const a = nextGroups[ai].students.find(s => s.id === p.aId)!
         const b = nextGroups[bi].students.find(s => s.id === p.bId)!
-        // 남여섞기OFF: 서로 성별 다르면 같은 모둠 금지 → 스킵
         if (mode === '남여섞기OFF' && a.gender !== '미정' && b.gender !== '미정' && a.gender !== b.gender) continue
 
         if (canAddTo(nextGroups[bi], a)) { tryMove(nextGroups, p.aId, bi) }
