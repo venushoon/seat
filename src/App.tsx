@@ -369,23 +369,12 @@ export default function App() {
               <button onClick={onInstall} className="ml-3 btn-primary">PWA 설치</button>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={saveAs} className="btn"><Save className="w-4 h-4 mr-1" />저장</button>
-            <button onClick={loadFrom} className="btn"><Upload className="w-4 h-4 mr-1" />불러오기</button>
-            <button onClick={exportCSV} className="btn"><Download className="w-4 h-4 mr-1" />CSV</button>
-            <button onClick={exportJSON} className="btn"><Download className="w-4 h-4 mr-1" />JSON</button>
-            <label className="btn cursor-pointer">
-              <Import className="w-4 h-4 mr-1" />JSON 불러오기
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/json"
-                className="hidden"
-                onChange={importJSON}
-              />
-            </label>
-            <button onClick={() => window.print()} className="btn"><Printer className="w-4 h-4 mr-1" />인쇄</button>
-          </div>
+<div className="flex items-center gap-2">
+  {/* 상단은 가볍게 — 액션들은 왼쪽 사이드바로 이동 */}
+  {installAvailable && (
+    <button onClick={onInstall} className="btn-primary">PWA 설치</button>
+  )}
+</div>
         </div>
       </header>
 
