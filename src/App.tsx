@@ -527,30 +527,47 @@ export default function App() {
                 onDrop={onDropToGroup(gi)}
                 className={`min-h-[120px] grid grid-cols-1 gap-2 p-2 rounded-xl border-2 ${g.students.length<groupSize?'border-dashed border-slate-300':'border-slate-200'}`}
               >
-                {g.students.map((s) => (
-                  <motion.div
-                    key={s.id}
-                    layout
-                    className={`flex items-center justify-between rounded-xl px-3 py-2 border bg-white shadow-sm ${s.locked?'ring-2 ring-amber-400':''}`}
-                    draggable
-                    onDragStart={onDragStart(s.id)}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${
-                        s.gender==='남' ? 'bg-blue-100 text-blue-700'
-                        : s.gender==='여' ? 'bg-pink-100 text-pink-700'
-                        : 'bg-slate-100 text-slate-700'
-                      }`}>{s.gender}</span>
-                      <span className="font-medium">{s.name || '(이름)'}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button onClick={()=>toggleLock(s.id)} className={`icon-btn ${s.locked?'text-amber-600':'text-slate-500'}`} title="고정">
-                        {s.locked ? <Lock className="w-4 h-4"/> : <Unlock className="w-4 h-4"/>}
-                      </button>
-                      <button onClick={()=>moveOut(s.id)} className="icon-btn" title="미배치로 이동">↩︎</button>
-                    </div>
-                  </motion.div>
-                ))}
+{g.students.map((s) => (
+  <motion.div
+    key={s.id}
+    layout
+    className={`rounded-xl border bg-white shadow-sm ${s.locked ? 'ring-2 ring-amber-400' : ''}`}
+  >
+    <div
+      className="flex items-center justify-between px-3 py-2 rounded-xl"
+      draggable
+      onDragStart={onDragStart(s.id)}   // ✅ HTML5 DnD는 일반 div에!
+      title="드래그하여 다른 모둠으로 이동"
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={`px-2 py-0.5 rounded-full text-xs ${
+            s.gender === '남'
+              ? 'bg-blue-100 text-blue-700'
+              : s.gender === '여'
+              ? 'bg-pink-100 text-pink-700'
+              : 'bg-slate-100 text-slate-700'
+          }`}
+        >
+          {s.gender}
+        </span>
+        <span className="font-medium">{s.name || '(이름)'}</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => toggleLock(s.id)}
+          className={`icon-btn ${s.locked ? 'text-amber-600' : 'text-slate-500'}`}
+          title="고정"
+        >
+          {s.locked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+        </button>
+        <button onClick={() => moveOut(s.id)} className="icon-btn" title="미배치로 이동">
+          ↩︎
+        </button>
+      </div>
+    </div>
+  </motion.div>
+))}
                 {g.students.length===0 && (
                   <div className="text-center text-slate-400 text-sm py-6">여기로 드래그하여 추가</div>
                 )}
