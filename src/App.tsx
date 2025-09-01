@@ -185,15 +185,15 @@ export default function App() {
     setStudents(ss => ss.filter(x => x.id !== stuId))
   }
 
-  // ===== DnD (드롭도 원자 처리로 수정) =====
-  const onDragStart = (id: string) => (e: React.DragEvent) => {
+  // ===== DnD (드롭도 동일 로직 사용) =====
+  const startDrag = (id: string) => (e: React.DragEvent) => {
     e.dataTransfer.setData('text/plain', id)
   }
   const onDropToGroup = (gidx: number) => (e: React.DragEvent) => {
     e.preventDefault()
     const id = e.dataTransfer.getData('text/plain')
     if (!id) return
-    assignToGroup(id, gidx) // 동일 원자 로직 사용
+    assignToGroup(id, gidx)
   }
 
   // ===== 배치 알고리즘 =====
@@ -315,7 +315,7 @@ export default function App() {
           for (let gj = 0; gj < gc && counts[gi].m < maleTargets[gi]; gj++) if (gj !== gi) {
             const donor = nextGroups[gj].students.find(s => s.gender === '남' && !s.locked)
             const receiver = nextGroups[gi].students.find(s => s.gender !== '남' && !s.locked)
-            if (donor && receiver) { // 교환
+            if (donor && receiver) {
               const ai = nextGroups[gi].students.findIndex(s => s.id === receiver.id)
               const bi = nextGroups[gj].students.findIndex(s => s.id === donor.id)
               const A = nextGroups[gi], B = nextGroups[gj]
@@ -367,8 +367,6 @@ export default function App() {
         const b = nextGroups[bi].students.find(s => s.id === p.bId)!
         if (mode === '남여섞기OFF' && a.gender !== '미정' && b.gender !== '미정' && a.gender !== b.gender) continue
 
-        // 간단 이동 또는 교환
-        const canB = nextGroups[ai].students.length > 0
         if (canAddTo(nextGroups[bi], a)) {
           const from = ai
           nextGroups[from] = { ...nextGroups[from], students: nextGroups[from].students.filter(s => s.id !== a.id) }
@@ -467,14 +465,7 @@ export default function App() {
     reader.readAsText(file); ev.currentTarget.value = ''
   }
 
-  // ===== DnD 시작 핸들러(표/칩 공용) =====
-  const startDrag = (id: string) => (e: React.DragEvent) => {
-    e.dataTransfer.setData('text/plain', id)
-  }
-
   // ===== UI =====
-  const placedIds = useMemo(() => new Set(groups.flatMap(g => g.students.map(s => s.id))), [groups])
-
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white print:bg-white">
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b print:hidden">
