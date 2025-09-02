@@ -169,7 +169,7 @@ export default function App(){
   const startDrag=(id:string)=>(e:React.DragEvent)=>{ e.dataTransfer.setData('text/plain',id) }
   const onDropToGroup=(gidx:number)=>(e:React.DragEvent)=>{ e.preventDefault(); const id=e.dataTransfer.getData('text/plain'); if(id) assignToGroup(id,gidx) }
 
-  // 자동 편성 (로스터 students를 그대로 사용)
+  // 자동 편성
   function arrange(){
     const gc=Math.max(2,Math.min(8,groupCount))
     const minG=Math.max(2,Math.min(8,minPerGroup))
@@ -178,9 +178,8 @@ export default function App(){
     const pool:Student[]=[]
     const nextGroups:Group[]=groups.slice(0,gc).map(g=>({
       ...g,
-      students:g.students.filter(s=>s.locked) // 잠긴 학생만 남기고
+      students:g.students.filter(s=>s.locked)
     }))
-    // 잠기지 않은 학생 + 현재 미배치 학생을 풀에 넣음
     groups.forEach(g=>g.students.forEach(s=>{ if(!s.locked) pool.push(s) }))
     students.forEach(s=>{
       if(!nextGroups.some(g=>g.students.some(x=>x.id===s.id))) pool.push(s)
@@ -389,13 +388,15 @@ export default function App(){
           {/* 좌측 */}
           <aside className="col-span-12 lg:col-span-4 print:hidden">
             <div className="sticky top-[68px] space-y-4">
-              {/* 옵션 */}
+              {/* 옵션 — ✅ 3개 입력칸을 한 줄로 (작은 화면에선 1열) */}
               <section className="card p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2"><span className="chip chip-blue"></span><h2 className="section-title">편성 옵션</h2></div>
                   <span className="badge">{mode==='남여섞기OFF'?'남/여 분리':'혼합 허용'}</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-[.9rem]">
+
+                {/* 첫 줄: 모둠 수 / 최소 인원 / 인원 상한 */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[.9rem] mb-2">
                   <label className="form-label">모둠 수
                     <input type="number" min={2} max={8} value={groupCount} onChange={(e)=>setGroupCount(Math.min(8,Math.max(2,parseInt(e.target.value||'4'))))} className="input input-sm"/>
                   </label>
@@ -405,7 +406,11 @@ export default function App(){
                   <label className="form-label">인원 상한
                     <input type="number" min={Math.max(3,minPerGroup)} max={8} value={maxPerGroup} onChange={(e)=>{const v=Math.max(minPerGroup,Math.min(8,parseInt(e.target.value||String(minPerGroup)))); setMaxPerGroup(v)}} className="input input-sm"/>
                   </label>
-                  <label className="form-label col-span-2">편성 방법
+                </div>
+
+                {/* 둘째 줄: 편성 방법 */}
+                <div className="grid grid-cols-1 gap-2 text-[.9rem]">
+                  <label className="form-label">편성 방법
                     <select value={mode} onChange={(e)=>setMode(e.target.value as Mode)} className="input input-sm">
                       <option value="성비균형">성비 균형 (남녀 섞음)</option>
                       <option value="완전랜덤">완전 랜덤 (섞음)</option>
@@ -413,6 +418,7 @@ export default function App(){
                     </select>
                   </label>
                 </div>
+
                 <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
                   <div>총 <b>{students.length}</b> · 수용 <b>{groupCount*maxPerGroup}</b></div>
                   <div className={capacity<total?'text-red-600':'text-slate-600'}>{capacityNote}</div>
@@ -536,7 +542,7 @@ export default function App(){
                         <th className="p-2" style={{width:'6.5em'}}>성별</th>
                         <th className="p-2">상태</th>
                         <th className="p-2 text-center" style={{width:'6.5em'}}>이동</th>
-                        <th className="p-2" style={{width:'6.5em'}}></th>
+                        <th className="p-2" style={{width:'8.5em'}}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -564,10 +570,14 @@ export default function App(){
                                 {groups.map((g,idx)=><option key={g.id} value={idx+1} disabled={g.students.length>=maxPerGroup}>{idx+1}</option>)}
                               </select>
                             </td>
-                            <td className="p-2 text-right">
-                              <button onClick={()=>toggleLock(s.id)} className={`icon-btn ${s.locked?'text-amber-600':'text-slate-500'}`} title="고정">{s.locked?<Lock className="w-4 h-4"/>:<Unlock className="w-4 h-4"/>}</button>
-                              <button onClick={()=>removeStudent(s.id)} className="icon-btn text-rose-600" title="삭제"><Trash2 className="w-4 h-4"/></button>
-                              <button draggable onDragStart={startDrag(s.id)} className="icon-btn" title="드래그 이동">↔︎</button>
+
+                            {/* ✅ 아이콘을 한 줄 가로 정렬 */}
+                            <td className="p-2">
+                              <div className="flex items-center justify-end gap-2">
+                                <button onClick={()=>toggleLock(s.id)} className={`icon-btn ${s.locked?'text-amber-600':'text-slate-500'}`} title="고정">{s.locked?<Lock className="w-4 h-4"/>:<Unlock className="w-4 h-4"/>}</button>
+                                <button onClick={()=>removeStudent(s.id)} className="icon-btn text-rose-600" title="삭제"><Trash2 className="w-4 h-4"/></button>
+                                <button draggable onDragStart={startDrag(s.id)} className="icon-btn" title="드래그 이동">↔︎</button>
+                              </div>
                             </td>
                           </tr>
                         )
