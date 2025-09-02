@@ -44,7 +44,6 @@ function parseCSV(text:string):Student[] {
   }
   return out
 }
-// 비례 배분 보정
 function hamiltonRound(values:number[], total:number){
   const floors=values.map(Math.floor)
   let sum=floors.reduce((a,b)=>a+b,0)
@@ -56,7 +55,6 @@ function hamiltonRound(values:number[], total:number){
 }
 
 export default function App(){
-  // 상태
   const [students,setStudents]=useState<Student[]>([])
   const [groups,setGroups]=useState<Group[]>(Array.from({length:4},(_,i)=>({id:gid(), name:`${i+1}모둠`, students:[]})))
   const [groupCount,setGroupCount]=useState(4)
@@ -66,17 +64,14 @@ export default function App(){
   const [filterUnplaced,setFilterUnplaced]=useState(false)
   const [bulk,setBulk]=useState('')
 
-  // 제약
   const [friendPairs,setFriendPairs]=useState<Pair[]>([])
   const [antiPairs,setAntiPairs]=useState<Pair[]>([])
   const [selA,setSelA]=useState(''),[selB,setSelB]=useState('')
   const [selA2,setSelA2]=useState(''),[selB2,setSelB2]=useState('')
 
-  // 파일 input
   const jsonInputRef=useRef<HTMLInputElement>(null)
   const csvInputRef=useRef<HTMLInputElement>(null)
 
-  // 저장/로드
   useEffect(()=>{ const saved=localStorage.getItem('seat-arranger:auto'); if(saved){ try{
     const p=JSON.parse(saved)
     setStudents(p.students||[]); setGroups(p.groups||[])
@@ -85,7 +80,6 @@ export default function App(){
   }catch{}}},[])
   useEffect(()=>{ const payload={students,groups,groupCount,minPerGroup,maxPerGroup,mode,friendPairs,antiPairs}; localStorage.setItem('seat-arranger:auto', JSON.stringify(payload))},[students,groups,groupCount,minPerGroup,maxPerGroup,mode,friendPairs,antiPairs])
 
-  // 그룹 수 동기화
   useEffect(()=>{ setGroups(prev=>{
     const arr=[...prev]
     if(groupCount>prev.length){
@@ -98,7 +92,6 @@ export default function App(){
     return arr.map((g,i)=>({...g,name:`${i+1}모둠`}))
   })},[groupCount])
 
-  // 파생
   const placedIds=useMemo(()=>new Set(groups.flatMap(g=>g.students.map(s=>s.id))),[groups])
   const capacity=groupCount*maxPerGroup
   const total=students.length
@@ -107,7 +100,6 @@ export default function App(){
   const groupNameOf=(id:string)=> (findGroupIdxOf(id)>=0? groups[findGroupIdxOf(id)].name : '')
   const nameOf=(id:string)=>students.find(s=>s.id===id)?.name||groups.flatMap(g=>g.students).find(s=>s.id===id)?.name||'(이름)'
 
-  // 유틸
   const dedupeById = (arr:Student[]) => {
     const seen = new Set<string>()
     const out:Student[]=[]
@@ -118,15 +110,12 @@ export default function App(){
     return out
   }
   const addRow=()=>setStudents(s=>[...s,{id:gid(),name:'',gender:'미정',locked:false}])
-
-  // ✅ 수정: 초기화 → 모든 학생을 미배치로 돌리고, 모둠 비우기
   const clearAll=()=>{ 
     if(!confirm('모든 모둠 배치를 해제하고 학생들을 미배치 목록으로 되돌립니다.')) return
     const back = groups.flatMap(g=>g.students).map(st=>({...st, locked:false}))
     setStudents(prev=>dedupeById([...prev, ...back]))
     setGroups(gs=>gs.map(g=>({...g,students:[]})))
   }
-
   const removeStudent=(id:string)=>{ 
     setStudents(s=>s.filter(x=>x.id!==id))
     setGroups(gs=>gs.map(g=>({...g,students:g.students.filter(x=>x.id!==id)})))
@@ -142,7 +131,6 @@ export default function App(){
   }
   const applyBulk=()=>{ const parsed=parseBulk(bulk); if(!parsed.length) return; setStudents(s=>[...s,...parsed]); setBulk('') }
 
-  // 성별 규칙
   const groupGenderOf=(g:Group):Gender|'혼합'|'비어있음'=>{
     if(!g.students.length) return '비어있음'
     const set=new Set(g.students.map(s=>s.gender))
@@ -163,7 +151,6 @@ export default function App(){
   const hasAntiWith = (g:Group, st:Student) =>
     g.students.some(s=> antiPairs.some(p=>(p.aId===s.id&&p.bId===st.id)||(p.aId===st.id&&p.bId===s.id)))
 
-  // 수동 배치(성공시에만 목록에서 제거)
   function assignToGroup(stuId:string, gidx:number){
     const st = students.find(s=>s.id===stuId) || groups.flatMap(g=>g.students).find(s=>s.id===stuId)
     if(!st) return false
@@ -186,11 +173,9 @@ export default function App(){
     return added
   }
 
-  // DnD
   const startDrag=(id:string)=>(e:React.DragEvent)=>{ e.dataTransfer.setData('text/plain',id) }
   const onDropToGroup=(gidx:number)=>(e:React.DragEvent)=>{ e.preventDefault(); const id=e.dataTransfer.getData('text/plain'); if(id) assignToGroup(id,gidx) }
 
-  // 자동 편성(균등 + 2차 밸런싱)
   function arrange(){
     const gc=Math.max(2,Math.min(8,groupCount))
     const minG=Math.max(2,Math.min(8,minPerGroup))
@@ -220,7 +205,6 @@ export default function App(){
     }
     const targets=base.map((b,i)=>Math.min(cap[i], b+extras[i]))
 
-    const antiSet = new Set(antiPairs.map(p=>`${p.aId}|${p.bId}`))
     const friendMap = new Map<string,string[]>()
     friendPairs.forEach(p=>{
       friendMap.set(p.aId,[...(friendMap.get(p.aId)||[]), p.bId])
@@ -296,7 +280,6 @@ export default function App(){
       tryPlaceRoundRobin(all)
     }
 
-    // 2차 밸런싱
     const lockedCount = nextGroups.map(g => g.students.filter(s=>s.locked).length)
     let movedSomething = true, safety=0
     while (movedSomething && safety < 200) {
@@ -335,7 +318,6 @@ export default function App(){
     setStudents(remain)
   }
 
-  // 저장/불러오기/내보내기/인쇄
   function saveAs(){
     const name=prompt('저장 이름을 입력하세요 (예: 2학기-6학년-1반)'); if(!name) return
     const saves=JSON.parse(localStorage.getItem('seat-arranger:saves')||'{}')
@@ -386,7 +368,6 @@ export default function App(){
     r.readAsText(file,'utf-8'); e.currentTarget.value=''
   }
 
-  // UI
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white print:bg-white">
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b print:hidden">
@@ -400,7 +381,7 @@ export default function App(){
 
       <main className="max-w-7xl mx-auto px-4 py-5 print:p-0">
         <div className="grid grid-cols-12 gap-5">
-          {/* 좌측 패널 */}
+          {/* 좌측 */}
           <aside className="col-span-12 lg:col-span-4 print:hidden">
             <div className="sticky top-[68px] space-y-4">
               {/* 옵션 */}
@@ -483,27 +464,27 @@ export default function App(){
                 </div>
               </section>
 
-              {/* 데이터 & 출력 */}
+              {/* 데이터 & 출력 (아이콘 + 확장자 라벨) */}
               <section className="card p-4 text-[.8rem]">
                 <div className="flex items-center gap-2 mb-2"><span className="chip chip-emerald"></span><h2 className="section-title text-[.9rem]">데이터 & 출력</h2></div>
                 <div className="grid grid-cols-3 gap-1">
-                  <button onClick={saveAs} className="btn btn-xxs" title="저장"><Save className="icon-left icon-xs"/></button>
-                  <button onClick={loadFrom} className="btn btn-xxs" title="불러오기(저장 목록)"><Upload className="icon-left icon-xs"/></button>
-                  <button onClick={exportCSV} className="btn btn-xxs" title="CSV 내보내기"><Download className="icon-left icon-xs"/></button>
+                  <button onClick={saveAs} className="btn btn-xxs" title="저장"><Save className="icon-left icon-xs"/>저장</button>
+                  <button onClick={loadFrom} className="btn btn-xxs" title="저장 목록 불러오기"><Upload className="icon-left icon-xs"/>불러오기</button>
+                  <button onClick={exportCSV} className="btn btn-xxs" title="CSV 내보내기"><Download className="icon-left icon-xs"/>CSV ↓</button>
 
-                  <button onClick={exportJSON} className="btn btn-xxs" title="JSON 내보내기"><Download className="icon-left icon-xs"/></button>
+                  <button onClick={exportJSON} className="btn btn-xxs" title="JSON 내보내기"><Download className="icon-left icon-xs"/>JSON ↓</button>
 
-                  {/* ✅ 수정: 텍스트 제거, 아이콘만 표시 */}
-                  <label className="btn btn-xxs cursor-pointer" title="JSON 파일 불러오기">
-                    <Upload className="icon-left icon-xs"/>
+                  {/* 가져오기(파일) : 확장자명 보이기 */}
+                  <label className="btn btn-xxs cursor-pointer" title="JSON 파일 가져오기">
+                    <Upload className="icon-left icon-xs"/>JSON ↑
                     <input ref={jsonInputRef} type="file" accept="application/json" className="hidden" onChange={importJSON}/>
                   </label>
-                  <label className="btn btn-xxs cursor-pointer" title="CSV 파일 불러오기">
-                    <Upload className="icon-left icon-xs"/>
+                  <label className="btn btn-xxs cursor-pointer" title="CSV 파일 가져오기">
+                    <Upload className="icon-left icon-xs"/>CSV ↑
                     <input ref={csvInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={importCSV}/>
                   </label>
 
-                  <button onClick={()=>window.print()} className="btn btn-xxs col-span-3" title="인쇄"><Printer className="icon-left icon-xs"/></button>
+                  <button onClick={()=>window.print()} className="btn btn-xxs col-span-3" title="인쇄"><Printer className="icon-left icon-xs"/>인쇄</button>
                 </div>
               </section>
             </div>
