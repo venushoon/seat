@@ -23,6 +23,7 @@ const parseBulk = (text:string):Student[] =>
     const gender=(m?.[2] as Gender)||'미정'
     return { id: gid(), name, gender, locked:false }
   })
+
 function parseCSV(text:string):Student[] {
   const clean=text.replace(/^\uFEFF/,'')
   const rows=clean.split(/\r?\n/).map(r=>r.trim()).filter(Boolean)
@@ -44,6 +45,7 @@ function parseCSV(text:string):Student[] {
   }
   return out
 }
+
 function hamiltonRound(values:number[], total:number){
   const floors=values.map(Math.floor)
   let sum=floors.reduce((a,b)=>a+b,0)
@@ -72,6 +74,7 @@ export default function App(){
   const jsonInputRef=useRef<HTMLInputElement>(null)
   const csvInputRef=useRef<HTMLInputElement>(null)
 
+  // 자동 저장/복원
   useEffect(()=>{ const saved=localStorage.getItem('seat-arranger:auto'); if(saved){ try{
     const p=JSON.parse(saved)
     setStudents(p.students||[]); setGroups(p.groups||[])
@@ -80,6 +83,7 @@ export default function App(){
   }catch{}}},[])
   useEffect(()=>{ const payload={students,groups,groupCount,minPerGroup,maxPerGroup,mode,friendPairs,antiPairs}; localStorage.setItem('seat-arranger:auto', JSON.stringify(payload))},[students,groups,groupCount,minPerGroup,maxPerGroup,mode,friendPairs,antiPairs])
 
+  // 모둠 수 증감 시 동기화
   useEffect(()=>{ setGroups(prev=>{
     const arr=[...prev]
     if(groupCount>prev.length){
@@ -110,12 +114,15 @@ export default function App(){
     return out
   }
   const addRow=()=>setStudents(s=>[...s,{id:gid(),name:'',gender:'미정',locked:false}])
+
+  // 초기화 → 모든 학생 미배치로 복귀
   const clearAll=()=>{ 
     if(!confirm('모든 모둠 배치를 해제하고 학생들을 미배치 목록으로 되돌립니다.')) return
     const back = groups.flatMap(g=>g.students).map(st=>({...st, locked:false}))
     setStudents(prev=>dedupeById([...prev, ...back]))
     setGroups(gs=>gs.map(g=>({...g,students:[]})))
   }
+
   const removeStudent=(id:string)=>{ 
     setStudents(s=>s.filter(x=>x.id!==id))
     setGroups(gs=>gs.map(g=>({...g,students:g.students.filter(x=>x.id!==id)})))
@@ -124,13 +131,21 @@ export default function App(){
     setStudents(s=>s.map(x=>x.id===id?{...x,locked:!x.locked}:x))
     setGroups(gs=>gs.map(g=>({...g,students:g.students.map(x=>x.id===id?{...x,locked:!x.locked}:x)})))
   }
-  const moveOut=(id:string)=>{ 
-    let moved:Student|null=null
-    setGroups(prev=>prev.map(g=>({...g,students:g.students.filter(s=>{ if(s.id===id){moved=s; return false} return true })})))
-    if(moved) setStudents(s=>dedupeById([...s,{...moved!,locked:false}]))
+
+  // ✅ 견고한 미배치 이동 (학생 목록에서 사라짐 방지)
+  const moveOut = (id: string) => {
+    const current = groups.flatMap(g => g.students).find(s => s.id === id)
+    if (!current) return
+    setGroups(gs => gs.map(g => ({ ...g, students: g.students.filter(s => s.id !== id) })))
+    setStudents(prev => {
+      const without = prev.filter(p => p.id !== id)
+      return [...without, { ...current, locked: false }]
+    })
   }
+
   const applyBulk=()=>{ const parsed=parseBulk(bulk); if(!parsed.length) return; setStudents(s=>[...s,...parsed]); setBulk('') }
 
+  // 성별/제약 검사
   const groupGenderOf=(g:Group):Gender|'혼합'|'비어있음'=>{
     if(!g.students.length) return '비어있음'
     const set=new Set(g.students.map(s=>s.gender))
@@ -173,9 +188,11 @@ export default function App(){
     return added
   }
 
+  // 드래그 앤 드롭
   const startDrag=(id:string)=>(e:React.DragEvent)=>{ e.dataTransfer.setData('text/plain',id) }
   const onDropToGroup=(gidx:number)=>(e:React.DragEvent)=>{ e.preventDefault(); const id=e.dataTransfer.getData('text/plain'); if(id) assignToGroup(id,gidx) }
 
+  // 자동 편성 로직
   function arrange(){
     const gc=Math.max(2,Math.min(8,groupCount))
     const minG=Math.max(2,Math.min(8,minPerGroup))
@@ -270,8 +287,18 @@ export default function App(){
     } else if(mode==='성비균형'){
       const seats=targets.reduce((a,b)=>a+b,0) - nextGroups.reduce((a,g)=>a+g.students.length,0)
       const maleSeats=Math.round(seats * (males.length / Math.max(1,(males.length+females.length+others.length))))
-      const maleGoalPerGroup=hamiltonRound(targets.map((t,i)=>Math.max(0,t-nextGroups[i].students.length)*(males.length/Math.max(1,(males.length+females.length+others.length)))), Math.min(maleSeats,males.length))
-      for(const gi of order){ while(males.length && nextGroups[gi].students.filter(s=>s.gender==='남').length < maleGoalPerGroup[gi] && nextGroups[gi].students.length<targets[gi]){ const st=males.shift()!; if(put(gi,st)) placed.add(st.id); else males.unshift(st); break } }
+      const maleGoalPerGroup=hamiltonRound(
+        targets.map((t,i)=>Math.max(0,t-nextGroups[i].students.length)*(males.length/Math.max(1,(males.length+females.length+others.length)))),
+        Math.min(maleSeats,males.length)
+      )
+      for(const gi of order){
+        while(males.length &&
+              nextGroups[gi].students.filter(s=>s.gender==='남').length < maleGoalPerGroup[gi] &&
+              nextGroups[gi].students.length<targets[gi]){
+          const st=males.shift()!
+          if(put(gi,st)) placed.add(st.id); else { males.unshift(st); break }
+        }
+      }
       tryPlaceRoundRobin(males)
       tryPlaceRoundRobin(females)
       tryPlaceRoundRobin(others)
@@ -280,6 +307,7 @@ export default function App(){
       tryPlaceRoundRobin(all)
     }
 
+    // 잔여 균등화(최소/최대 및 잠금 고려)
     const lockedCount = nextGroups.map(g => g.students.filter(s=>s.locked).length)
     let movedSomething = true, safety=0
     while (movedSomething && safety < 200) {
@@ -318,6 +346,7 @@ export default function App(){
     setStudents(remain)
   }
 
+  // 저장/불러오기/출력
   function saveAs(){
     const name=prompt('저장 이름을 입력하세요 (예: 2학기-6학년-1반)'); if(!name) return
     const saves=JSON.parse(localStorage.getItem('seat-arranger:saves')||'{}')
@@ -418,11 +447,11 @@ export default function App(){
                 </div>
               </section>
 
-              {/* 제약 */}
+              {/* 제약 (친구/떼기) */}
               <section className="card p-4">
                 <div className="flex items-center gap-2 mb-2"><span className="chip chip-purple"></span><h2 className="section-title">제약 (친구/떼기)</h2></div>
 
-                {/* 친구: 셀렉트 2개 + 추가 버튼 (우측 배치) */}
+                {/* 친구: 셀렉트 2개 + 추가 버튼 오른쪽 */}
                 <div className="mb-2">
                   <div className="text-[.82rem] font-semibold text-slate-700 mb-1">친구(같이 배치)</div>
                   <div className="grid grid-cols-[1fr,1fr,auto] gap-2">
@@ -451,7 +480,7 @@ export default function App(){
 
                 <hr className="my-3 border-slate-200"/>
 
-                {/* 떼기: 셀렉트 2개 + 추가 버튼 (우측 배치) */}
+                {/* 떼기: 셀렉트 2개 + 추가 버튼 오른쪽 */}
                 <div>
                   <div className="text-[.82rem] font-semibold text-slate-700 mb-1">떼기(같은 모둠 금지)</div>
                   <div className="grid grid-cols-[1fr,1fr,auto] gap-2">
@@ -479,7 +508,7 @@ export default function App(){
                 </div>
               </section>
 
-              {/* 데이터 & 출력 (아이콘 + 확장자 라벨) */}
+              {/* 데이터 & 출력 */}
               <section className="card p-4 text-[.8rem]">
                 <div className="flex items-center gap-2 mb-2"><span className="chip chip-emerald"></span><h2 className="section-title text-[.9rem]">데이터 & 출력</h2></div>
                 <div className="grid grid-cols-3 gap-1">
@@ -522,7 +551,7 @@ export default function App(){
               </div>
 
               <div className="rounded-xl border overflow-hidden">
-                <div className="max-h-[300px] overflow-auto">
+                <div className="max-h=[300px] md:max-h-[300px] overflow-auto">
                   <table className="w-full text-[0.88rem]">
                     <thead className="bg-slate-50 sticky top-0 z-10">
                       <tr className="text-left text-slate-600">
