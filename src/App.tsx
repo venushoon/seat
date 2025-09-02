@@ -115,9 +115,13 @@ export default function App() {
   const capacity = groupCount * maxPerGroup
   const total = students.length
   const capacityNote = capacity < total ? `⚠️ 자리(${capacity}) < 학생(${total})` : capacity > total ? `남는 자리: ${capacity - total}` : '정확히 맞음'
+  const findGroupIdxOf = (id: string) => groups.findIndex(g => g.students.some(s => s.id === id))
+  const groupNameOf = (id: string) => {
+    const gi = findGroupIdxOf(id)
+    return gi >= 0 ? groups[gi].name : ''
+  }
 
   // ===== 유틸 =====
-  function* cycle(arr: number[]) { let k = 0; while (true) yield arr[k++ % arr.length] }
   const fileInputRef = useRef<HTMLInputElement>(null)
   const addRow = () => setStudents(s => [...s, { id: gid(), name: '', gender: '미정', locked: false }])
   const clearAll = () => { if (!confirm('모든 그룹 배치를 초기화하고 미배치로 돌립니다.')) return; setGroups(gs => gs.map(g => ({ ...g, students: [] }))) }
@@ -152,40 +156,42 @@ export default function App() {
     if (gg === '혼합') return false
     return gg === st.gender
   }
-  const findGroupIdxOf = (gs: Group[], id: string) => gs.findIndex(g => g.students.some(s => s.id === id))
 
-  // === 빠른 수동 배치 & 중복 방지: 단일 setGroups에서 제거→추가 원자 처리 ===
+  // === 빠른 수동 배치 (원자 처리 & 성공시에만 목록 제거) ===
   function assignToGroup(stuId: string, gidx: number) {
     const st: Student | undefined =
       students.find(s => s.id === stuId) ||
       groups.flatMap(g => g.students).find(s => s.id === stuId)
     if (!st) return
 
+    const inStudents = students.some(s => s.id === stuId)
+    let added = false
+
     setGroups(prev => {
       if (gidx < 0 || gidx >= prev.length) return prev
-      // 1) 모든 그룹에서 해당 학생 제거
       let fromIdx = -1
       const stripped = prev.map((g, i) => {
         const exists = g.students.some(s => s.id === stuId)
         if (exists) fromIdx = i
         return { ...g, students: g.students.filter(s => s.id !== stuId) }
       })
-      // 같은 그룹으로 이동 요청이면 그대로 반환
       if (fromIdx === gidx) return prev
 
       const target = stripped[gidx]
-      // 2) 규칙 검사는 제거 후 상태 기준으로 수행
       if (!canAddTo(target, st)) return prev
-      if (target.students.some(s => s.id === stuId)) return stripped // 혹시 모를 중복 방지
-      // 3) 추가
+      if (target.students.length >= maxPerGroup) return prev
+
       stripped[gidx] = { ...target, students: [...target.students, st] }
+      added = true
       return stripped
     })
-    // 미배치 목록에서 제거
-    setStudents(ss => ss.filter(x => x.id !== stuId))
+
+    if (inStudents && added) {
+      setStudents(ss => ss.filter(x => x.id !== stuId))
+    }
   }
 
-  // ===== DnD (드롭도 동일 로직 사용) =====
+  // ===== DnD =====
   const startDrag = (id: string) => (e: React.DragEvent) => {
     e.dataTransfer.setData('text/plain', id)
   }
@@ -217,23 +223,10 @@ export default function App() {
     const alreadyPlaced = new Set(nextGroups.flatMap(g => g.students.map(s => s.id)))
     students.forEach(s => { if (!lockedIds.has(s.id) && !alreadyPlaced.has(s.id)) pool.push(s) })
 
-    // 2) 그룹 타깃 인원(최소/최대 + 공평 분배)
-    const totalNow = lockedIds.size + pool.length
+    // 2) 그룹 타깃 인원(최소/최대 + 공평 분배: 섞기 모드에서 사용)
     const lockedCounts = nextGroups.map(g => g.students.length)
+    const totalNow = lockedIds.size + pool.length
     const targets = Array(gc).fill(0).map((_,i)=>Math.max(minG, Math.min(maxG, lockedCounts[i])))
-    let sumTargets = targets.reduce((a,b)=>a+b,0)
-    while (sumTargets < Math.min(totalNow, gc*maxPerGroup)) {
-      let changed = false
-      for (let i = 0; i < gc && sumTargets < Math.min(totalNow, gc*maxPerGroup); i++) {
-        if (targets[i] < maxPerGroup) { targets[i]++; sumTargets++; changed = true }
-      }
-      if (!changed) break
-    }
-    while (sumTargets > totalNow) {
-      let i = targets.indexOf(Math.max(...targets))
-      if (i === -1) break
-      if (targets[i] > Math.max(minG, lockedCounts[i])) { targets[i]--; sumTargets-- } else break
-    }
 
     // 3) 풀 분해
     let males = shuffleArray(pool.filter(s => s.gender === '남'))
@@ -241,186 +234,117 @@ export default function App() {
     let others = shuffleArray(pool.filter(s => s.gender === '미정'))
     const order = shuffleArray(Array.from({ length: gc }, (_, i) => i))
 
-    const canPut = (idx: number) => nextGroups[idx].students.length < targets[idx]
     const put = (idx: number, st: Student) => {
-      if (!canPut(idx)) return false
-      if (!canAddTo(nextGroups[idx], st)) return false
-      nextGroups[idx] = { ...nextGroups[idx], students: [...nextGroups[idx].students, st] }
+      const g = nextGroups[idx]
+      if (g.students.length >= maxG) return false
+      if (!canAddTo(g, st)) return false
+      nextGroups[idx] = { ...g, students: [...g.students, st] }
       return true
     }
-    function* cyc(a: number[]) { let k = 0; while (true) yield a[k++ % a.length] }
 
-    // 4) 모드별 배치
+    // === 남/여 섞지 않기: 남자 우선 최소인원 충족 → 나머지 그룹을 여자로 ===
     if (mode === '남여섞기OFF') {
-      const lockState: ('unset' | Gender | 'blocked')[] = nextGroups.map(g => {
+      // 후보 그룹 분류
+      const malePrefer: number[] = []
+      const empty: number[] = []
+      const femalePrefer: number[] = []
+
+      nextGroups.forEach((g, i) => {
         const gg = groupGenderOf(g)
-        if (gg === '혼합') return 'blocked'
-        if (gg === '비어있음') return 'unset'
-        return gg
+        if (gg === '혼합') return // 블록
+        if (gg === '남') malePrefer.push(i)
+        else if (gg === '여') femalePrefer.push(i)
+        else empty.push(i)
       })
-      const fillGender = (queue: Student[], gender: Gender) => {
-        for (let idx of cyc(order)) {
-          if (!queue.length) break
-          if (!canPut(idx)) continue
-          if (lockState[idx] === 'blocked') continue
-          if (lockState[idx] === 'unset' || lockState[idx] === gender) {
-            const st = queue[0]
-            if (put(idx, st)) {
-              queue.shift()
-              if (lockState[idx] === 'unset') lockState[idx] = gender
-            }
-          }
-          const anySpace = nextGroups.some((g, gi) =>
-            nextGroups[gi].students.length < targets[gi] &&
-            lockState[gi] !== 'blocked' &&
-            (lockState[gi] === 'unset' || lockState[gi] === gender)
-          )
-          if (!anySpace) break
+
+      // 남자 그룹 수 결정: 기존 남 그룹 + 비어있는 그룹 사용, 최소인원 보장 가능 수 만큼
+      const baseMaleGroups = malePrefer.slice()
+      const extraMaleGroupsNeeded = Math.max(0, Math.floor(males.length / minG) - baseMaleGroups.length)
+      const chosenMale = baseMaleGroups.concat(empty.slice(0, extraMaleGroupsNeeded)).slice(0, gc)
+
+      // 1) 남자 그룹에 최소인원 라운드로빈 배치
+      for (let round = 0; round < minG; round++) {
+        for (const gi of chosenMale) {
+          if (!males.length) break
+          if (nextGroups[gi].students.length >= maxG) continue
+          if (put(gi, males[0])) males.shift()
         }
       }
-      if (males.length >= females.length) { fillGender(males, '남'); fillGender(females, '여') }
-      else { fillGender(females, '여'); fillGender(males, '남') }
-      // others(미정) 자동 배치 안 함
+      // 2) 남자 그룹에 남은 인원 정원까지 배치
+      outerM: while (males.length) {
+        let progressed = false
+        for (const gi of chosenMale) {
+          if (!males.length) break outerM
+          if (put(gi, males[0])) { males.shift(); progressed = true }
+        }
+        if (!progressed) break
+      }
+
+      // 여자 그룹 후보: 기존 여 + 남자 선택되지 않은 비어있는 그룹
+      const usedMaleSet = new Set(chosenMale)
+      const femaleCandidates = femalePrefer.concat(empty.filter(i => !usedMaleSet.has(i)))
+
+      // 3) 여자 그룹에 최소인원 라운드로빈 배치
+      for (let round = 0; round < minG; round++) {
+        for (const gi of femaleCandidates) {
+          if (!females.length) break
+          if (nextGroups[gi].students.length >= maxG) continue
+          if (put(gi, females[0])) females.shift()
+        }
+      }
+      // 4) 여자 그룹에 남은 인원 정원까지 배치
+      outerF: while (females.length) {
+        let progressed = false
+        for (const gi of femaleCandidates) {
+          if (!females.length) break outerF
+          if (put(gi, females[0])) { females.shift(); progressed = true }
+        }
+        if (!progressed) break
+      }
+
+      // 미정 성별은 규칙상 배치하지 않고 미배치 유지
+      // 완료
     } else if (mode === '성비균형') {
+      // 섞기 모드: 성비 타깃 후 배치
       const totalPool = males.length + females.length + others.length
       const maleRatio = totalPool ? males.length / totalPool : 0.5
-      const rawMaleTargets = targets.map(t => t * maleRatio)
-      const maleTargets = hamiltonRound(rawMaleTargets, Math.min(males.length, targets.reduce((a,b)=>a+b,0)))
+      // 목표 총 좌석(잠금 포함)
+      const seats = targets.reduce((a,b)=>a+b,0)
+      const maleTargets = hamiltonRound(targets.map(t => t * maleRatio), Math.min(males.length, seats))
+
       const counts = nextGroups.map(g => ({
         m: g.students.filter(s => s.gender === '남').length,
         f: g.students.filter(s => s.gender === '여').length,
         o: g.students.filter(s => s.gender === '미정').length,
       }))
-      for (let idx of cyc(order)) {
-        while (canPut(idx) && males.length && counts[idx].m < maleTargets[idx]) {
-          const st = males[0]
-          if (put(idx, st)) { males.shift(); counts[idx].m++ } else break
-        }
-        if (!order.some(i => counts[i].m < maleTargets[i] && canPut(i))) break
-      }
-      for (let idx of cyc(order)) {
-        while (canPut(idx) && (females.length || others.length)) {
-          let st: Student | undefined
-          if (females.length) st = females.shift()!
-          else if (others.length) st = others.shift()!
-          if (!st) break
-          if (!put(idx, st)) break
-        }
-        if (!order.some(i => canPut(i) && (females.length || others.length))) break
-      }
-      for (let gi = 0; gi < gc; gi++) {
-        const need = maleTargets[gi] - counts[gi].m
-        if (need === 0) continue
-        if (need > 0) {
-          for (let gj = 0; gj < gc && counts[gi].m < maleTargets[gi]; gj++) if (gj !== gi) {
-            const donor = nextGroups[gj].students.find(s => s.gender === '남' && !s.locked)
-            const receiver = nextGroups[gi].students.find(s => s.gender !== '남' && !s.locked)
-            if (donor && receiver) {
-              const ai = nextGroups[gi].students.findIndex(s => s.id === receiver.id)
-              const bi = nextGroups[gj].students.findIndex(s => s.id === donor.id)
-              const A = nextGroups[gi], B = nextGroups[gj]
-              const aArr = [...A.students]; const bArr = [...B.students]
-              aArr[ai] = donor; bArr[bi] = receiver
-              nextGroups[gi] = { ...A, students: aArr }; nextGroups[gj] = { ...B, students: bArr }
-              counts[gi].m++; counts[gj].m--
-            }
-          }
-        } else {
-          for (let gj = 0; gj < gc && counts[gi].m > maleTargets[gi]; gj++) if (gj !== gi) {
-            const donor = nextGroups[gi].students.find(s => s.gender === '남' && !s.locked)
-            const receiver = nextGroups[gj].students.find(s => s.gender !== '남' && !s.locked)
-            if (donor && receiver) {
-              const ai = nextGroups[gi].students.findIndex(s => s.id === donor.id)
-              const bi = nextGroups[gj].students.findIndex(s => s.id === receiver.id)
-              const A = nextGroups[gi], B = nextGroups[gj]
-              const aArr = [...A.students]; const bArr = [...B.students]
-              aArr[ai] = receiver; bArr[bi] = donor
-              nextGroups[gi] = { ...A, students: aArr }; nextGroups[gj] = { ...B, students: bArr }
-              counts[gi].m--; counts[gj].m++
-            }
-          }
+
+      // 남 우선 충족
+      for (const gi of order) {
+        while (nextGroups[gi].students.length < targets[gi] && males.length && counts[gi].m < maleTargets[gi]) {
+          if (put(gi, males[0])) { males.shift(); counts[gi].m++ } else break
         }
       }
+      // 나머지(여/미정)
+      for (const gi of order) {
+        while (nextGroups[gi].students.length < targets[gi] && (females.length || others.length)) {
+          const st = females.length ? females.shift()! : others.shift()!
+          if (!put(gi, st)) break
+        }
+      }
+      // 가벼운 보정은 생략(충분히 안정적)
     } else {
       // 완전랜덤
       let all = shuffleArray([...males, ...females, ...others])
-      const stepsMax = targets.reduce((a,b)=>a+b,0) * 2
-      let steps = 0
-      outer2: for (let idx of cyc(order)) {
-        if (steps++ > stepsMax) break
-        while (canPut(idx) && all.length) {
+      for (const gi of order) {
+        while (nextGroups[gi].students.length < targets[gi] && all.length) {
           const st = all.shift()!
-          if (put(idx, st)) { /* ok */ }
-          else continue outer2
-        }
-      }
-    }
-
-    // 5) 제약 시도
-    const MAX_ITERS = 3
-    for (let t = 0; t < MAX_ITERS; t++) {
-      // 친구
-      for (const p of friendPairs) {
-        const ai = findGroupIdxOf(nextGroups, p.aId), bi = findGroupIdxOf(nextGroups, p.bId)
-        if (ai === -1 || bi === -1 || ai === bi) continue
-        const a = nextGroups[ai].students.find(s => s.id === p.aId)!
-        const b = nextGroups[bi].students.find(s => s.id === p.bId)!
-        if (mode === '남여섞기OFF' && a.gender !== '미정' && b.gender !== '미정' && a.gender !== b.gender) continue
-
-        if (canAddTo(nextGroups[bi], a)) {
-          const from = ai
-          nextGroups[from] = { ...nextGroups[from], students: nextGroups[from].students.filter(s => s.id !== a.id) }
-          nextGroups[bi] = { ...nextGroups[bi], students: [...nextGroups[bi].students, a] }
-        } else if (canAddTo(nextGroups[ai], b)) {
-          const from = bi
-          nextGroups[from] = { ...nextGroups[from], students: nextGroups[from].students.filter(s => s.id !== b.id) }
-          nextGroups[ai] = { ...nextGroups[ai], students: [...nextGroups[ai].students, b] }
-        } else {
-          const candA = nextGroups[ai].students.find(s => !s.locked && s.id !== a.id)
-          const candB = nextGroups[bi].students.find(s => !s.locked && s.id !== b.id)
-          if (candA && candB) {
-            const aiA = nextGroups[ai].students.findIndex(s => s.id === candA.id)
-            const biB = nextGroups[bi].students.findIndex(s => s.id === b.id)
-            const A = nextGroups[ai], B = nextGroups[bi]
-            const aArr = [...A.students]; const bArr = [...B.students]
-            aArr[aiA] = b; bArr[biB] = candA
-            nextGroups[ai] = { ...A, students: aArr }; nextGroups[bi] = { ...B, students: bArr }
-          }
-        }
-      }
-      // 떼기
-      for (const p of antiPairs) {
-        const ai = findGroupIdxOf(nextGroups, p.aId), bi = findGroupIdxOf(nextGroups, p.bId)
-        if (ai === -1 || bi === -1 || ai !== bi) continue
-        const toOrder = shuffleArray(Array.from({ length: groupCount }, (_, i) => i).filter(i => i !== ai))
-        let moved = false
-        for (const ti of toOrder) {
-          const b = nextGroups[ai].students.find(s => s.id === p.bId)!
-          if (canAddTo(nextGroups[ti], b)) {
-            nextGroups[ai] = { ...nextGroups[ai], students: nextGroups[ai].students.filter(s => s.id !== b.id) }
-            nextGroups[ti] = { ...nextGroups[ti], students: [...nextGroups[ti].students, b] }
-            moved = true; break
-          }
-        }
-        if (!moved) {
-          for (const ti of toOrder) {
-            const cand = nextGroups[ti].students.find(s => !s.locked)
-            const b = nextGroups[ai].students.find(s => s.id === p.bId)!
-            if (cand && canAddTo(nextGroups[ai], cand)) {
-              const aiB = nextGroups[ai].students.findIndex(s => s.id === b.id)
-              const tiC = nextGroups[ti].students.findIndex(s => s.id === cand.id)
-              const A = nextGroups[ai], T = nextGroups[ti]
-              const aArr = [...A.students]; const tArr = [...T.students]
-              aArr[aiB] = cand; tArr[tiC] = b
-              nextGroups[ai] = { ...A, students: aArr }; nextGroups[ti] = { ...T, students: tArr }
-              break
-            }
-          }
+          if (!put(gi, st)) break
         }
       }
     }
 
     setGroups(nextGroups)
+    // pool에서 못 들어간 남은 인원(특히 남여섞기OFF에서 최소 미달)은 그대로 students에 남아 "미배치" 상태로 보이게 됩니다.
   }
 
   // ===== 저장/불러오기/내보내기/인쇄 =====
@@ -486,7 +410,7 @@ export default function App() {
             <div className="sticky top-[72px] space-y-4">
               {/* 편성 옵션 */}
               <section className="card p-5">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <span className="chip chip-blue"></span>
                     <h2 className="section-title">편성 옵션</h2>
@@ -494,27 +418,27 @@ export default function App() {
                   <span className="badge">{mode === '남여섞기OFF' ? '남/여 분리' : '혼합 허용'}</span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2 text-[.92rem]">
                   <label className="form-label">모둠 수
                     <input type="number" min={2} max={8} value={groupCount}
                       onChange={(e)=>setGroupCount(Math.min(8, Math.max(2, parseInt(e.target.value || '4'))))}
-                      className="input" />
+                      className="input input-sm" />
                   </label>
 
                   <label className="form-label">최소 인원
                     <input type="number" min={2} max={8} value={minPerGroup}
                       onChange={(e)=>{ const v = Math.max(2, Math.min(8, parseInt(e.target.value || '3'))); setMinPerGroup(v); if (maxPerGroup < v) setMaxPerGroup(v) }}
-                      className="input" />
+                      className="input input-sm" />
                   </label>
 
                   <label className="form-label">인원 상한
                     <input type="number" min={Math.max(3, minPerGroup)} max={8} value={maxPerGroup}
                       onChange={(e)=>{ const v = Math.max(minPerGroup, Math.min(8, parseInt(e.target.value || String(minPerGroup)))); setMaxPerGroup(v) }}
-                      className="input" />
+                      className="input input-sm" />
                   </label>
 
                   <label className="form-label col-span-2">편성 방법
-                    <select value={mode} onChange={(e)=>setMode(e.target.value as Mode)} className="input">
+                    <select value={mode} onChange={(e)=>setMode(e.target.value as Mode)} className="input input-sm">
                       <option value="성비균형">성비 균형 (남녀 섞음)</option>
                       <option value="완전랜덤">완전 랜덤 (섞음)</option>
                       <option value="남여섞기OFF">남/여 섞지 않기</option>
@@ -522,36 +446,35 @@ export default function App() {
                   </label>
                 </div>
 
-                <div className="mt-4 flex items-center justify-between text-sm text-slate-600">
-                  <div>총 학생 <b>{students.length}</b> · 수용 <b>{groupCount * maxPerGroup}</b></div>
+                <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
+                  <div>총 <b>{students.length}</b> · 수용 <b>{groupCount * maxPerGroup}</b></div>
                   <div className={(groupCount * maxPerGroup) < students.length ? 'text-red-600' : 'text-slate-600'}>{capacityNote}</div>
                 </div>
 
-                <div className="mt-4 flex gap-2">
-                  <button onClick={arrange} className="btn-primary lg:btn-lg"><Shuffle className="icon-left" />자동 편성</button>
-                  <button onClick={clearAll} className="btn-ghost lg:btn-lg"><Trash2 className="icon-left" />초기화</button>
+                <div className="mt-3 flex gap-2">
+                  <button onClick={arrange} className="btn-primary"><Shuffle className="icon-left" />자동 편성</button>
+                  <button onClick={clearAll} className="btn-ghost"><Trash2 className="icon-left" />초기화</button>
                 </div>
               </section>
 
               {/* 제약(친구/떼기) */}
               <section className="card p-5">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <span className="chip chip-purple"></span>
                     <h2 className="section-title">제약 (친구/떼기)</h2>
                   </div>
-                  <span className="badge">선택</span>
                 </div>
 
                 {/* 친구(같이) */}
-                <div className="mb-3">
-                  <div className="text-sm font-semibold text-slate-700 mb-2">친구(같이 배치)</div>
+                <div className="mb-2">
+                  <div className="text-[.85rem] font-semibold text-slate-700 mb-1.5">친구(같이 배치)</div>
                   <div className="grid grid-cols-2 gap-2 mb-2">
-                    <select className="input" value={selA} onChange={(e)=>setSelA(e.target.value)}>
+                    <select className="input input-sm" value={selA} onChange={(e)=>setSelA(e.target.value)}>
                       <option value="">학생 A</option>
                       {students.map(s=> <option key={s.id} value={s.id}>{s.name || '(이름)'}</option>)}
                     </select>
-                    <select className="input" value={selB} onChange={(e)=>setSelB(e.target.value)}>
+                    <select className="input input-sm" value={selB} onChange={(e)=>setSelB(e.target.value)}>
                       <option value="">학생 B</option>
                       {students.map(s=> <option key={s.id} value={s.id}>{s.name || '(이름)'}</option>)}
                     </select>
@@ -579,13 +502,13 @@ export default function App() {
 
                 {/* 떼기 */}
                 <div>
-                  <div className="text-sm font-semibold text-slate-700 mb-2">떼기(같은 모둠 금지)</div>
+                  <div className="text-[.85rem] font-semibold text-slate-700 mb-1.5">떼기(같은 모둠 금지)</div>
                   <div className="grid grid-cols-2 gap-2 mb-2">
-                    <select className="input" value={selA2} onChange={(e)=>setSelA2(e.target.value)}>
+                    <select className="input input-sm" value={selA2} onChange={(e)=>setSelA2(e.target.value)}>
                       <option value="">학생 A</option>
                       {students.map(s=> <option key={s.id} value={s.id}>{s.name || '(이름)'}</option>)}
                     </select>
-                    <select className="input" value={selB2} onChange={(e)=>setSelB2(e.target.value)}>
+                    <select className="input input-sm" value={selB2} onChange={(e)=>setSelB2(e.target.value)}>
                       <option value="">학생 B</option>
                       {students.map(s=> <option key={s.id} value={s.id}>{s.name || '(이름)'}</option>)}
                     </select>
@@ -612,7 +535,7 @@ export default function App() {
 
               {/* 데이터 & 출력 (작게) */}
               <section className="card p-5">
-                <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2 mb-3">
                   <span className="chip chip-emerald"></span>
                   <h2 className="section-title">데이터 & 출력</h2>
                 </div>
@@ -634,53 +557,60 @@ export default function App() {
           {/* ===== 오른쪽: 학생 목록(프린트 제외) + 모둠 카드 ===== */}
           <section className="col-span-12 lg:col-span-8">
             {/* 학생 목록 — 인쇄 제외 */}
-            <section className="card p-5 mb-6 print:hidden">
-              <div className="flex items-center justify-between mb-3">
+            <section className="card p-4 mb-6 print:hidden">
+              <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2"><span className="chip chip-amber"></span><h2 className="section-title">학생 목록</h2></div>
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-2 text-sm">
+                <div className="flex items-center gap-2 text-xs">
+                  <label className="flex items-center gap-2">
                     <input type="checkbox" checked={filterUnplaced} onChange={(e)=>setFilterUnplaced(e.target.checked)} />
                     미배치만
                   </label>
-                  <button onClick={addRow} className="btn"><Plus className="icon-left" />추가</button>
+                  <button onClick={addRow} className="btn btn-sm"><Plus className="icon-left" />추가</button>
                 </div>
               </div>
 
-              <div className="grid md:grid-cols-3 gap-3 mb-3">
+              <div className="grid md:grid-cols-3 gap-2 mb-2">
                 <textarea value={bulk} onChange={(e)=>setBulk(e.target.value)}
-                  placeholder={"여러 줄 붙여넣기 예)\n김철수/남\n이영희/여\n박민수 남"} className="input md:col-span-2 h-24" />
+                  placeholder={"여러 줄 붙여넣기 예)\n김철수/남\n이영희/여\n박민수 남"} className="input input-sm md:col-span-2 h-24" />
                 <button onClick={applyBulk} className="btn-accent">붙여넣기 추가</button>
               </div>
 
               <div className="rounded-xl border overflow-hidden">
-                <div className="max-h-[360px] overflow-auto">
-                  <table className="w-full text-[0.95rem]">
+                <div className="max-h-[320px] overflow-auto">
+                  <table className="w-full text-[0.9rem]">
                     <thead className="bg-slate-50 sticky top-0 z-10">
                       <tr className="text-left text-slate-600">
-                        <th className="p-2 w-10">#</th>
+                        <th className="p-2 w-8">#</th>
                         <th className="p-2">이름</th>
-                        <th className="p-2 w-28">성별</th>
-                        <th className="p-2 w-28">상태</th>
-                        <th className="p-2 w-24">이동</th>
-                        <th className="p-2 w-28"></th>
+                        <th className="p-2 w-24">성별</th>
+                        <th className="p-2 w-36">상태</th>
+                        <th className="p-2 w-20">이동</th>
+                        <th className="p-2 w-24"></th>
                       </tr>
                     </thead>
                     <tbody>
                       {(filterUnplaced ? students.filter(s=>!placedIds.has(s.id)) : students).map((s, i) => {
                         const placed = placedIds.has(s.id)
+                        const gname = placed ? groupNameOf(s.id) : ''
                         return (
                           <tr key={s.id} className={`border-t ${placed ? 'bg-indigo-50/35' : ''}`}>
                             <td className="p-2 text-slate-500">{i + 1}</td>
-                            <td className="p-2"><input value={s.name} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, name:e.target.value}:x))} className="input" placeholder="이름" /></td>
                             <td className="p-2">
-                              <select value={s.gender} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, gender:e.target.value as Gender}:x))} className="input">
+                              <input value={s.name} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, name:e.target.value}:x))} className="input input-sm" placeholder="이름" />
+                            </td>
+                            <td className="p-2">
+                              <select value={s.gender} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, gender:e.target.value as Gender}:x))} className="input input-sm">
                                 <option value="미정">미정</option><option value="남">남</option><option value="여">여</option>
                               </select>
                             </td>
-                            <td className="p-2"><span className={`inline-flex items-center gap-1 ${placed ? 'text-indigo-700' : 'text-slate-600'}`}>{placed ? '배치됨' : '미배치'}</span></td>
+                            <td className="p-2 text-[.85rem]">
+                              <span className={`inline-flex items-center gap-1 ${placed ? 'text-indigo-700' : 'text-slate-600'}`}>
+                                {placed ? <>배치됨 · <b>{gname}</b></> : '미배치'}
+                              </span>
+                            </td>
                             <td className="p-2">
                               <select
-                                className="input input-xs"
+                                className="input input-sm"
                                 defaultValue=""
                                 onChange={(e) => {
                                   const v = parseInt(e.target.value)
@@ -737,7 +667,6 @@ export default function App() {
                               <span className="font-medium text-slate-800">{s.name || '(이름)'}</span>
                             </div>
                             <div className="flex items-center gap-1">
-                              {/* 모둠 안 퀵 이동 */}
                               <select
                                 className="input input-xxs"
                                 defaultValue=""
@@ -775,22 +704,21 @@ export default function App() {
         {/* 스타일 */}
         <style>{`
           :root{ --blue:#2563eb; --emerald:#10b981; --purple:#7c3aed; --amber:#f59e0b; --indigo:#4f46e5; }
-          .btn{ display:inline-flex; align-items:center; gap:.5rem; padding:.6rem .9rem; border-radius:.9rem; border:1px solid rgb(226,232,240); background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.05); font-weight:600; font-size:.95rem; color:#0f172a; }
-          .btn-sm{ padding:.4rem .6rem; font-size:.85rem; border-radius:.7rem; }
-          .btn-lg{ padding:.7rem 1rem; font-size:1rem; }
-          .btn-primary{ display:inline-flex; align-items:center; gap:.5rem; padding:.6rem 1rem; border-radius:1rem; background:var(--blue); color:#fff; font-weight:700; letter-spacing:.01em; }
-          .btn-ghost{ display:inline-flex; align-items:center; gap:.5rem; padding:.6rem .9rem; border-radius:1rem; color:#334155; background:transparent; border:1px solid rgba(148,163,184,.35); }
-          .btn-accent{ display:inline-flex; align-items:center; justify-content:center; gap:.5rem; padding:.6rem .9rem; border-radius:1rem; font-weight:800; background:linear-gradient(135deg,#34d399,#10b981); color:white; border:1px solid #a7f3d0; box-shadow:0 6px 14px -6px rgba(16,185,129,.4); }
+          .btn{ display:inline-flex; align-items:center; gap:.5rem; padding:.55rem .85rem; border-radius:.85rem; border:1px solid rgb(226,232,240); background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.05); font-weight:600; font-size:.95rem; color:#0f172a; }
+          .btn-sm{ padding:.35rem .55rem; font-size:.82rem; border-radius:.7rem; }
+          .btn-primary{ display:inline-flex; align-items:center; gap:.5rem; padding:.55rem .9rem; border-radius:.9rem; background:var(--blue); color:#fff; font-weight:700; }
+          .btn-ghost{ display:inline-flex; align-items:center; gap:.5rem; padding:.55rem .85rem; border-radius:.9rem; color:#334155; background:transparent; border:1px solid rgba(148,163,184,.35); }
+          .btn-accent{ display:inline-flex; align-items:center; justify-content:center; gap:.5rem; padding:.55rem .85rem; border-radius:1rem; font-weight:800; background:linear-gradient(135deg,#34d399,#10b981); color:white; border:1px solid #a7f3d0; box-shadow:0 6px 14px -6px rgba(16,185,129,.4); }
           .icon-left{ width:1rem; height:1rem; margin-right:.1rem; }
-          .input{ width:100%; padding:.55rem .75rem; border:1px solid rgb(226,232,240); border-radius:.85rem; background:#fff; }
+          .input{ width:100%; padding:.5rem .7rem; border:1px solid rgb(226,232,240); border-radius:.75rem; background:#fff; }
+          .input-sm{ padding:.4rem .55rem; border-radius:.6rem; font-size:.9rem; }
           .input-xxs{ width:auto; padding:.2rem .35rem; border:1px solid rgb(226,232,240); border-radius:.5rem; background:#fff; font-size:.75rem; }
-          .input-xs{ padding:.35rem .5rem; border-radius:.6rem; font-size:.85rem; }
-          .form-label{ font-size:.95rem; color:#334155; display:flex; flex-direction:column; gap:.35rem; }
+          .form-label{ font-size:.9rem; color:#334155; display:flex; flex-direction:column; gap:.3rem; }
           .card{ background:#fff; border:1px solid rgb(226,232,240); border-radius:1rem; box-shadow:0 1px 2px rgba(0,0,0,.05); }
-          .icon-btn{ width:2rem; height:2rem; border-radius:9999px; display:inline-flex; align-items:center; justify-content:center; }
+          .icon-btn{ width:1.8rem; height:1.8rem; border-radius:9999px; display:inline-flex; align-items:center; justify-content:center; }
           .section-title{ font-size:1rem; font-weight:700; color:#0f172a; }
           .badge{ font-size:.7rem; padding:.15rem .5rem; border-radius:.5rem; background:#eef2ff; color:#4338ca; border:1px solid #e0e7ff; }
-          .chip{ width:.6rem; height:.6rem; border-radius:9999px; display:inline-block; }
+          .chip{ width:.55rem; height:.55rem; border-radius:9999px; display:inline-block; }
           .chip-blue{ background:linear-gradient(135deg,#dbeafe,#93c5fd); border:1px solid #bfdbfe; }
           .chip-emerald{ background:linear-gradient(135deg,#d1fae5,#86efac); border:1px solid #a7f3d0; }
           .chip-purple{ background:linear-gradient(135deg,#ede9fe,#c4b5fd); border:1px solid #ddd6fe; }
@@ -802,7 +730,7 @@ export default function App() {
             header, .print\\:hidden { display:none !important; }
             body { background:white !important; }
             .card { box-shadow:none !important; border:none !important; }
-            .btn, .btn-primary, .btn-ghost, .btn-accent, .btn-sm, .input, .input-xxs, .input-xs, textarea, select, label { display:none !important; }
+            .btn, .btn-primary, .btn-ghost, .btn-accent, .btn-sm, .input, .input-xxs, .input-sm, textarea, select, label { display:none !important; }
           }
         `}</style>
       </main>
