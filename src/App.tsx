@@ -421,19 +421,27 @@ export default function App(){
               {/* 제약 */}
               <section className="card p-4">
                 <div className="flex items-center gap-2 mb-2"><span className="chip chip-purple"></span><h2 className="section-title">제약 (친구/떼기)</h2></div>
+
+                {/* 친구: 셀렉트 2개 + 추가 버튼 (우측 배치) */}
                 <div className="mb-2">
                   <div className="text-[.82rem] font-semibold text-slate-700 mb-1">친구(같이 배치)</div>
-                  <div className="grid grid-cols-2 gap-2 mb-2">
-                    <select className="input input-sm" value={selA} onChange={(e)=>setSelA(e.target.value)}><option value="">학생 A</option>{[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}</select>
-                    <select className="input input-sm" value={selB} onChange={(e)=>setSelB(e.target.value)}><option value="">학생 B</option>{[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}</select>
+                  <div className="grid grid-cols-[1fr,1fr,auto] gap-2">
+                    <select className="input input-sm" value={selA} onChange={(e)=>setSelA(e.target.value)}>
+                      <option value="">학생 A</option>
+                      {[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}
+                    </select>
+                    <select className="input input-sm" value={selB} onChange={(e)=>setSelB(e.target.value)}>
+                      <option value="">학생 B</option>
+                      {[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}
+                    </select>
+                    <button className="btn btn-xs whitespace-nowrap" onClick={()=>{
+                      if(!selA||!selB||selA===selB) return
+                      const exists=friendPairs.some(p=>(p.aId===selA&&p.bId===selB)||(p.aId===selB&&p.bId===selA))
+                      const conflicted=antiPairs.some(p=>(p.aId===selA&&p.bId===selB)||(p.aId===selB&&p.bId===selA))
+                      if(conflicted){ alert('이미 떼기 제약에 존재합니다.'); return }
+                      if(!exists) setFriendPairs(ps=>[...ps,{aId:selA,bId:selB}]); setSelA(''); setSelB('')
+                    }}>추가</button>
                   </div>
-                  <button className="btn btn-xs" onClick={()=>{
-                    if(!selA||!selB||selA===selB) return
-                    const exists=friendPairs.some(p=>(p.aId===selA&&p.bId===selB)||(p.aId===selB&&p.bId===selA))
-                    const conflicted=antiPairs.some(p=>(p.aId===selA&&p.bId===selB)||(p.aId===selB&&p.bId===selA))
-                    if(conflicted){ alert('이미 떼기 제약에 존재합니다.'); return }
-                    if(!exists) setFriendPairs(ps=>[...ps,{aId:selA,bId:selB}]); setSelA(''); setSelB('')
-                  }}>추가</button>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {friendPairs.map((p,i)=>(
                       <span key={`f-${i}`} className="tag tag-emerald">{nameOf(p.aId)} ↔ {nameOf(p.bId)}<button className="ml-1 inline-flex" onClick={()=>setFriendPairs(ps=>ps.filter((_,idx)=>idx!==i))}><X className="w-3 h-3"/></button></span>
@@ -443,19 +451,26 @@ export default function App(){
 
                 <hr className="my-3 border-slate-200"/>
 
+                {/* 떼기: 셀렉트 2개 + 추가 버튼 (우측 배치) */}
                 <div>
                   <div className="text-[.82rem] font-semibold text-slate-700 mb-1">떼기(같은 모둠 금지)</div>
-                  <div className="grid grid-cols-2 gap-2 mb-2">
-                    <select className="input input-sm" value={selA2} onChange={(e)=>setSelA2(e.target.value)}><option value="">학생 A</option>{[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}</select>
-                    <select className="input input-sm" value={selB2} onChange={(e)=>setSelB2(e.target.value)}><option value="">학생 B</option>{[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}</select>
+                  <div className="grid grid-cols-[1fr,1fr,auto] gap-2">
+                    <select className="input input-sm" value={selA2} onChange={(e)=>setSelA2(e.target.value)}>
+                      <option value="">학생 A</option>
+                      {[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}
+                    </select>
+                    <select className="input input-sm" value={selB2} onChange={(e)=>setSelB2(e.target.value)}>
+                      <option value="">학생 B</option>
+                      {[...students, ...groups.flatMap(g=>g.students)].map(s=><option key={s.id} value={s.id}>{s.name||'(이름)'}</option>)}
+                    </select>
+                    <button className="btn btn-xs whitespace-nowrap" onClick={()=>{
+                      if(!selA2||!selB2||selA2===selB2) return
+                      const exists=antiPairs.some(p=>(p.aId===selA2&&p.bId===selB2)||(p.aId===selB2&&p.bId===selA2))
+                      const conflicted=friendPairs.some(p=>(p.aId===selA2&&p.bId===selB2)||(p.aId===selB2&&p.bId===selA2))
+                      if(conflicted){ alert('이미 친구 제약에 존재합니다.'); return }
+                      if(!exists) setAntiPairs(ps=>[...ps,{aId:selA2,bId:selB2}]); setSelA2(''); setSelB2('')
+                    }}>추가</button>
                   </div>
-                  <button className="btn btn-xs" onClick={()=>{
-                    if(!selA2||!selB2||selA2===selB2) return
-                    const exists=antiPairs.some(p=>(p.aId===selA2&&p.bId===selB2)||(p.aId===selB2&&p.bId===selA2))
-                    const conflicted=friendPairs.some(p=>(p.aId===selA2&&p.bId===selB2)||(p.aId===selB2&&p.bId===selA2))
-                    if(conflicted){ alert('이미 친구 제약에 존재합니다.'); return }
-                    if(!exists) setAntiPairs(ps=>[...ps,{aId:selA2,bId:selB2}]); setSelA2(''); setSelB2('')
-                  }}>추가</button>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {antiPairs.map((p,i)=>(
                       <span key={`a-${i}`} className="tag tag-rose">{nameOf(p.aId)} ≠ {nameOf(p.bId)}<button className="ml-1 inline-flex" onClick={()=>setAntiPairs(ps=>ps.filter((_,idx)=>idx!==i))}><X className="w-3 h-3"/></button></span>
@@ -474,7 +489,6 @@ export default function App(){
 
                   <button onClick={exportJSON} className="btn btn-xxs" title="JSON 내보내기"><Download className="icon-left icon-xs"/>JSON ↓</button>
 
-                  {/* 가져오기(파일) : 확장자명 보이기 */}
                   <label className="btn btn-xxs cursor-pointer" title="JSON 파일 가져오기">
                     <Upload className="icon-left icon-xs"/>JSON ↑
                     <input ref={jsonInputRef} type="file" accept="application/json" className="hidden" onChange={importJSON}/>
