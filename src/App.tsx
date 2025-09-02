@@ -15,7 +15,7 @@ type Pair = { aId: string; bId: string }
 const gid = () => Math.random().toString(36).slice(2, 9)
 const shuffleArray = <T,>(arr: T[]) => { const a=[...arr]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]} return a }
 
-// ------- 붙여넣기/CSV 파서 -------
+// 붙여넣기/CSV 파서
 const parseBulk = (text:string):Student[] =>
   text.split(/\n|,/).map(s=>s.trim()).filter(Boolean).map(line=>{
     const m=line.match(/([^/\s,|]+)[/\s,|]*(남|여)?/)
@@ -56,7 +56,7 @@ function hamiltonRound(values:number[], total:number){
 }
 
 export default function App(){
-  // ------- 상태 -------
+  // 상태
   const [students,setStudents]=useState<Student[]>([])
   const [groups,setGroups]=useState<Group[]>(Array.from({length:4},(_,i)=>({id:gid(), name:`${i+1}모둠`, students:[]})))
   const [groupCount,setGroupCount]=useState(4)
@@ -72,11 +72,11 @@ export default function App(){
   const [selA,setSelA]=useState(''),[selB,setSelB]=useState('')
   const [selA2,setSelA2]=useState(''),[selB2,setSelB2]=useState('')
 
-  // 파일 input ref
+  // 파일 input
   const jsonInputRef=useRef<HTMLInputElement>(null)
   const csvInputRef=useRef<HTMLInputElement>(null)
 
-  // ------- 저장/로드 -------
+  // 저장/로드
   useEffect(()=>{ const saved=localStorage.getItem('seat-arranger:auto'); if(saved){ try{
     const p=JSON.parse(saved)
     setStudents(p.students||[]); setGroups(p.groups||[])
@@ -93,7 +93,7 @@ export default function App(){
     }else if(groupCount<prev.length){
       const removed=arr.splice(groupCount)
       const back=removed.flatMap(g=>g.students)
-      if(back.length) setStudents(s=>[...s,...back.map(st=>({...st,locked:false}))])
+      if(back.length) setStudents(s=>dedupeById([...s, ...back.map(st=>({...st,locked:false}))]))
     }
     return arr.map((g,i)=>({...g,name:`${i+1}모둠`}))
   })},[groupCount])
@@ -107,12 +107,39 @@ export default function App(){
   const groupNameOf=(id:string)=> (findGroupIdxOf(id)>=0? groups[findGroupIdxOf(id)].name : '')
   const nameOf=(id:string)=>students.find(s=>s.id===id)?.name||groups.flatMap(g=>g.students).find(s=>s.id===id)?.name||'(이름)'
 
-  // ------- 유틸 -------
+  // 유틸
+  const dedupeById = (arr:Student[]) => {
+    const seen = new Set<string>()
+    const out:Student[]=[]
+    for(const s of arr){
+      if(seen.has(s.id)) continue
+      seen.add(s.id); out.push(s)
+    }
+    return out
+  }
   const addRow=()=>setStudents(s=>[...s,{id:gid(),name:'',gender:'미정',locked:false}])
-  const clearAll=()=>{ if(!confirm('모든 그룹 배치를 초기화하고 미배치로 돌립니다.')) return; setGroups(gs=>gs.map(g=>({...g,students:[]}))) }
-  const removeStudent=(id:string)=>{ setStudents(s=>s.filter(x=>x.id!==id)); setGroups(gs=>gs.map(g=>({...g,students:g.students.filter(x=>x.id!==id)}))) }
-  const toggleLock=(id:string)=>{ setStudents(s=>s.map(x=>x.id===id?{...x,locked:!x.locked}:x)); setGroups(gs=>gs.map(g=>({...g,students:g.students.map(x=>x.id===id?{...x,locked:!x.locked}:x)}))) }
-  const moveOut=(id:string)=>{ let moved:Student|null=null; setGroups(prev=>prev.map(g=>({...g,students:g.students.filter(s=>{ if(s.id===id){moved=s; return false} return true })}))); if(moved) setStudents(s=>[...s,{...moved!,locked:false}]) }
+
+  // ✅ 수정: 초기화 → 모든 학생을 미배치로 돌리고, 모둠 비우기
+  const clearAll=()=>{ 
+    if(!confirm('모든 모둠 배치를 해제하고 학생들을 미배치 목록으로 되돌립니다.')) return
+    const back = groups.flatMap(g=>g.students).map(st=>({...st, locked:false}))
+    setStudents(prev=>dedupeById([...prev, ...back]))
+    setGroups(gs=>gs.map(g=>({...g,students:[]})))
+  }
+
+  const removeStudent=(id:string)=>{ 
+    setStudents(s=>s.filter(x=>x.id!==id))
+    setGroups(gs=>gs.map(g=>({...g,students:g.students.filter(x=>x.id!==id)})))
+  }
+  const toggleLock=(id:string)=>{ 
+    setStudents(s=>s.map(x=>x.id===id?{...x,locked:!x.locked}:x))
+    setGroups(gs=>gs.map(g=>({...g,students:g.students.map(x=>x.id===id?{...x,locked:!x.locked}:x)})))
+  }
+  const moveOut=(id:string)=>{ 
+    let moved:Student|null=null
+    setGroups(prev=>prev.map(g=>({...g,students:g.students.filter(s=>{ if(s.id===id){moved=s; return false} return true })})))
+    if(moved) setStudents(s=>dedupeById([...s,{...moved!,locked:false}]))
+  }
   const applyBulk=()=>{ const parsed=parseBulk(bulk); if(!parsed.length) return; setStudents(s=>[...s,...parsed]); setBulk('') }
 
   // 성별 규칙
@@ -163,7 +190,7 @@ export default function App(){
   const startDrag=(id:string)=>(e:React.DragEvent)=>{ e.dataTransfer.setData('text/plain',id) }
   const onDropToGroup=(gidx:number)=>(e:React.DragEvent)=>{ e.preventDefault(); const id=e.dataTransfer.getData('text/plain'); if(id) assignToGroup(id,gidx) }
 
-  // ------- 자동 편성(균등 + 2차 밸런싱) -------
+  // 자동 편성(균등 + 2차 밸런싱)
   function arrange(){
     const gc=Math.max(2,Math.min(8,groupCount))
     const minG=Math.max(2,Math.min(8,minPerGroup))
@@ -171,16 +198,13 @@ export default function App(){
     const totalPool = students.length + groups.flatMap(g=>g.students.filter(s=>!s.locked)).length
     if(totalPool<minG*gc){ alert(`학생 수가 부족합니다. 최소 ${gc}×${minG} = ${minG*gc}명 필요`); return }
 
-    // 1) 잠금 유지 + 풀 구성
     const pool:Student[]=[]
     const nextGroups:Group[]=groups.slice(0,gc).map(g=>({
       ...g,
       students:g.students.filter(s=>{ if(s.locked) return true; pool.push(s); return false })
     }))
-    // students(미배치) 추가
     pool.push(...students)
 
-    // 2) 목표 인원 계산 (최소→정원 균등 분배)
     const lockedCounts=nextGroups.map(g=>g.students.length)
     const base=lockedCounts.map(c=>Math.max(minG,c))
     const cap=Array(gc).fill(maxG)
@@ -196,7 +220,6 @@ export default function App(){
     }
     const targets=base.map((b,i)=>Math.min(cap[i], b+extras[i]))
 
-    // 3) 제약 준비(친구/떼기)
     const antiSet = new Set(antiPairs.map(p=>`${p.aId}|${p.bId}`))
     const friendMap = new Map<string,string[]>()
     friendPairs.forEach(p=>{
@@ -204,7 +227,6 @@ export default function App(){
       friendMap.set(p.bId,[...(friendMap.get(p.bId)||[]), p.aId])
     })
 
-    // 4) 모드별 분배
     let males=shuffleArray(pool.filter(s=>s.gender==='남'))
     let females=shuffleArray(pool.filter(s=>s.gender==='여'))
     let others=shuffleArray(pool.filter(s=>s.gender==='미정'))
@@ -212,19 +234,16 @@ export default function App(){
     const canPut=(i:number, st:Student)=> nextGroups[i].students.length<targets[i] && canAddTo(nextGroups[i], st) && !hasAntiWith(nextGroups[i], st)
     const put=(i:number, st:Student)=>{ if(!canPut(i,st)) return false; nextGroups[i]={...nextGroups[i],students:[...nextGroups[i].students,st]}; return true }
 
-    // 친구 우선 배치(가능한 경우)
     const placed=new Set<string>()
     function placeWithFriend(st:Student){
       const frs=friendMap.get(st.id)||[]
       for(const gi of order){
         if(!canPut(gi,st)) continue
-        // 해당 그룹에 이미 친구가 있으면 같이
         const hasFriend = nextGroups[gi].students.some(x=>frs.includes(x.id))
         if(hasFriend) { put(gi,st); placed.add(st.id); return true }
       }
       return false
     }
-
     const tryPlaceRoundRobin=(arr:Student[])=>{
       let giIdx=0
       for(const st of arr){
@@ -236,18 +255,13 @@ export default function App(){
           if(put(gi,st)){ placed.add(st.id); placedOk=true; giIdx=(giIdx+tried+1)%gc; break }
           tried++
         }
-        if(!placedOk){
-          // 끝까지 못 놓으면 others로 미룸(마지막에 다시 시도)
-          others.push(st)
-        }
+        if(!placedOk){ others.push(st) }
       }
     }
 
     if(mode==='남여섞기OFF'){
-      // 남/여 전용 그룹 선택: 현재 그룹 성별·빈 그룹 고려
       const maleG:number[]=[], femaleG:number[]=[], empty:number[]=[]
       nextGroups.forEach((g,i)=>{ const gg=groupGenderOf(g); if(gg==='남') maleG.push(i); else if(gg==='여') femaleG.push(i); else if(gg==='비어있음') empty.push(i) })
-      // 남자 우선 그룹 확보
       const needMale=Math.max(0, Math.floor(males.length/minG)-maleG.length)
       const maleTargets = maleG.concat(empty.slice(0,needMale)).slice(0,gc)
       const used=new Set(maleTargets)
@@ -268,27 +282,21 @@ export default function App(){
       }
       rr(maleTargets, males)
       rr(femaleTargets, females)
-      // 기타는 못 놓을 수 있음(성별 미정)
       tryPlaceRoundRobin(others)
     } else if(mode==='성비균형'){
-      // 남:여 비율 기준 목표 좌석
       const seats=targets.reduce((a,b)=>a+b,0) - nextGroups.reduce((a,g)=>a+g.students.length,0)
       const maleSeats=Math.round(seats * (males.length / Math.max(1,(males.length+females.length+others.length))))
       const maleGoalPerGroup=hamiltonRound(targets.map((t,i)=>Math.max(0,t-nextGroups[i].students.length)*(males.length/Math.max(1,(males.length+females.length+others.length)))), Math.min(maleSeats,males.length))
-
-      // 남자 목표 우선 채우기
       for(const gi of order){ while(males.length && nextGroups[gi].students.filter(s=>s.gender==='남').length < maleGoalPerGroup[gi] && nextGroups[gi].students.length<targets[gi]){ const st=males.shift()!; if(put(gi,st)) placed.add(st.id); else males.unshift(st); break } }
-      // 나머지 라운드로빈
       tryPlaceRoundRobin(males)
       tryPlaceRoundRobin(females)
       tryPlaceRoundRobin(others)
     } else {
-      // 완전 랜덤
       const all=shuffleArray([...males,...females,...others])
       tryPlaceRoundRobin(all)
     }
 
-    // 5) 2차 재분배(밸런싱): 부족한 그룹이 있으면 여유있는 그룹에서 잠금X 학생 이동
+    // 2차 밸런싱
     const lockedCount = nextGroups.map(g => g.students.filter(s=>s.locked).length)
     let movedSomething = true, safety=0
     while (movedSomething && safety < 200) {
@@ -321,14 +329,13 @@ export default function App(){
       }
     }
 
-    // 미배치 갱신(남은 풀: placed에 없는 것)
     const placedAfter=new Set(nextGroups.flatMap(g=>g.students.map(s=>s.id)))
     const remain = pool.filter(s=>!placedAfter.has(s.id) && !s.locked)
     setGroups(nextGroups)
     setStudents(remain)
   }
 
-  // ------- 저장/불러오기/내보내기/인쇄 -------
+  // 저장/불러오기/내보내기/인쇄
   function saveAs(){
     const name=prompt('저장 이름을 입력하세요 (예: 2학기-6학년-1반)'); if(!name) return
     const saves=JSON.parse(localStorage.getItem('seat-arranger:saves')||'{}')
@@ -379,7 +386,7 @@ export default function App(){
     r.readAsText(file,'utf-8'); e.currentTarget.value=''
   }
 
-  // ------- UI -------
+  // UI
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white print:bg-white">
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b print:hidden">
@@ -430,7 +437,7 @@ export default function App(){
                 </div>
               </section>
 
-              {/* 제약(친구/떼기) */}
+              {/* 제약 */}
               <section className="card p-4">
                 <div className="flex items-center gap-2 mb-2"><span className="chip chip-purple"></span><h2 className="section-title">제약 (친구/떼기)</h2></div>
                 <div className="mb-2">
@@ -480,21 +487,23 @@ export default function App(){
               <section className="card p-4 text-[.8rem]">
                 <div className="flex items-center gap-2 mb-2"><span className="chip chip-emerald"></span><h2 className="section-title text-[.9rem]">데이터 & 출력</h2></div>
                 <div className="grid grid-cols-3 gap-1">
-                  <button onClick={saveAs} className="btn btn-xxs"><Save className="icon-left icon-xs"/>저장</button>
-                  <button onClick={loadFrom} className="btn btn-xxs"><Upload className="icon-left icon-xs"/>불러오기</button>
-                  <button onClick={exportCSV} className="btn btn-xxs"><Download className="icon-left icon-xs"/>CSV</button>
+                  <button onClick={saveAs} className="btn btn-xxs" title="저장"><Save className="icon-left icon-xs"/></button>
+                  <button onClick={loadFrom} className="btn btn-xxs" title="불러오기(저장 목록)"><Upload className="icon-left icon-xs"/></button>
+                  <button onClick={exportCSV} className="btn btn-xxs" title="CSV 내보내기"><Download className="icon-left icon-xs"/></button>
 
-                  <button onClick={exportJSON} className="btn btn-xxs"><Download className="icon-left icon-xs"/>JSON</button>
-                  <label className="btn btn-xxs cursor-pointer">
-                    <Upload className="icon-left icon-xs"/>JSON 불러오기
+                  <button onClick={exportJSON} className="btn btn-xxs" title="JSON 내보내기"><Download className="icon-left icon-xs"/></button>
+
+                  {/* ✅ 수정: 텍스트 제거, 아이콘만 표시 */}
+                  <label className="btn btn-xxs cursor-pointer" title="JSON 파일 불러오기">
+                    <Upload className="icon-left icon-xs"/>
                     <input ref={jsonInputRef} type="file" accept="application/json" className="hidden" onChange={importJSON}/>
                   </label>
-                  <label className="btn btn-xxs cursor-pointer">
-                    <Upload className="icon-left icon-xs"/>CSV 불러오기
+                  <label className="btn btn-xxs cursor-pointer" title="CSV 파일 불러오기">
+                    <Upload className="icon-left icon-xs"/>
                     <input ref={csvInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={importCSV}/>
                   </label>
 
-                  <button onClick={()=>window.print()} className="btn btn-xxs col-span-3"><Printer className="icon-left icon-xs"/>인쇄</button>
+                  <button onClick={()=>window.print()} className="btn btn-xxs col-span-3" title="인쇄"><Printer className="icon-left icon-xs"/></button>
                 </div>
               </section>
             </div>
