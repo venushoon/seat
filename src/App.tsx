@@ -11,7 +11,7 @@ type Pair = { aId: string; bId: string }
 const gid = () => Math.random().toString(36).slice(2, 9)
 function shuffleArray<T>(arr: T[]): T[] {
   const a = [...arr]
-  for (let i = a.length - 1; i > 0; i--) {
+  for (let i = a.length - 1; i > 0; i++) {
     const j = Math.floor(Math.random() * (i + 1))
     ;[a[i], a[j]] = [a[j], a[i]]
   }
@@ -28,6 +28,46 @@ function parseBulk(text: string): Student[] {
       const gender = (m?.[2] as Gender) || '미정'
       return { id: gid(), name, gender, locked: false } as Student
     })
+}
+/** CSV 파서(간단): 헤더 허용, BOM 제거, name/이름 · gender/성별 컬럼 인식 */
+function parseCSV(text: string): Student[] {
+  const clean = text.replace(/^\uFEFF/, '')
+  const lines = clean.split(/\r?\n/).map(l => l.trim()).filter(l => l.length)
+  if (!lines.length) return []
+  const split = (row: string) => {
+    // 아주 간단한 CSV 분할(따옴표 내 , 처리 X) — 일반적인 교사용 명단에 충분
+    return row.split(',').map(s => s.trim())
+  }
+  let header: string[] | null = null
+  const out: Student[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const cells = split(lines[i])
+    if (i === 0 && /^(이름|name)$/i.test(cells[0] || '') ) {
+      header = cells
+      continue
+    }
+    let name = ''
+    let genderRaw = ''
+    if (header) {
+      const ni = header.findIndex(h => /^(이름|name)$/i.test(h))
+      const gi = header.findIndex(h => /^(성별|gender)$/i.test(h))
+      name = (cells[ni] || '').trim()
+      genderRaw = (cells[gi] || '').trim()
+    } else {
+      name = (cells[0] || '').trim()
+      genderRaw = (cells[1] || '').trim()
+    }
+    if (!name) continue
+    const g = normalizeGender(genderRaw)
+    out.push({ id: gid(), name, gender: g, locked: false })
+  }
+  return out
+}
+function normalizeGender(s: string): Gender {
+  const v = (s || '').toLowerCase()
+  if (['남','남자','m','male','boy'].some(k => v.includes(k))) return '남'
+  if (['여','여자','f','female','girl'].some(k => v.includes(k))) return '여'
+  return '미정'
 }
 function hamiltonRound(values: number[], totalTarget: number): number[] {
   const floors = values.map(Math.floor)
@@ -113,6 +153,7 @@ export default function App() {
 
   // 유틸
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const csvInputRef = useRef<HTMLInputElement>(null)
   const addRow = () => setStudents(s => [...s, { id: gid(), name: '', gender: '미정', locked: false }])
   const clearAll = () => { if (!confirm('모든 그룹 배치를 초기화하고 미배치로 돌립니다.')) return; setGroups(gs => gs.map(g => ({ ...g, students: [] }))) }
   const removeStudent = (id: string) => { setStudents(s => s.filter(x => x.id !== id)); setGroups(gs => gs.map(g => ({ ...g, students: g.students.filter(x => x.id !== id) }))) }
@@ -178,7 +219,7 @@ export default function App() {
   const startDrag = (id: string) => (e: React.DragEvent) => { e.dataTransfer.setData('text/plain', id) }
   const onDropToGroup = (gidx: number) => (e: React.DragEvent) => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (id) assignToGroup(id, gidx) }
 
-  // 자동 편성
+  // 자동 편성 (남는 좌석은 정원까지 자동 채움)
   function arrange() {
     const gc = Math.max(2, Math.min(8, groupCount))
     const minG = Math.max(2, Math.min(8, minPerGroup))
@@ -253,7 +294,7 @@ export default function App() {
           }
         }
       }
-      fillRest(males); fillRest(females); fillRest(others) // others는 규칙상 대부분 불가지만 시도
+      fillRest(males); fillRest(females); fillRest(others)
 
     } else if (mode === '성비균형') {
       const totalPool = males.length + females.length + others.length
@@ -347,6 +388,19 @@ export default function App() {
       } catch { alert('JSON 파싱 실패') }
     }
     reader.readAsText(file); ev.currentTarget.value = ''
+  }
+  function importCSV(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0]; if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const add = parseCSV(String(reader.result || ''))
+        if (!add.length) { alert('CSV에서 학생을 찾지 못했습니다. (형식: 이름,성별)'); return }
+        setStudents(prev => [...prev, ...add])
+        alert(`${add.length}명 추가`)
+      } catch { alert('CSV 파싱 실패') }
+    }
+    reader.readAsText(file, 'utf-8'); ev.currentTarget.value = ''
   }
 
   // ===== UI =====
@@ -459,7 +513,7 @@ export default function App() {
                 </div>
               </section>
 
-              {/* 데이터 & 출력 – 초소형 3×2 */}
+              {/* 데이터 & 출력 – 3×3 초소형 */}
               <section className="card p-4 text-[.8rem]">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="chip chip-emerald"></span>
@@ -469,12 +523,18 @@ export default function App() {
                   <button onClick={saveAs} className="btn btn-xxs"><Save className="icon-left icon-xs" />저장</button>
                   <button onClick={loadFrom} className="btn btn-xxs"><Upload className="icon-left icon-xs" />불러오기</button>
                   <button onClick={exportCSV} className="btn btn-xxs"><Download className="icon-left icon-xs" />CSV</button>
+
                   <button onClick={exportJSON} className="btn btn-xxs"><Download className="icon-left icon-xs" />JSON</button>
                   <label className="btn btn-xxs cursor-pointer">
-                    <Import className="icon-left icon-xs" />JSON
+                    <Import className="icon-left icon-xs" />JSON 불러오기
                     <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={importJSON}/>
                   </label>
-                  <button onClick={()=>window.print()} className="btn btn-xxs"><Printer className="icon-left icon-xs" />인쇄</button>
+                  <label className="btn btn-xxs cursor-pointer">
+                    <Import className="icon-left icon-xs" />CSV 불러오기
+                    <input ref={csvInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={importCSV}/>
+                  </label>
+
+                  <button onClick={()=>window.print()} className="btn btn-xxs col-span-3"><Printer className="icon-left icon-xs" />인쇄</button>
                 </div>
               </section>
             </div>
@@ -506,7 +566,7 @@ export default function App() {
                     <thead className="bg-slate-50 sticky top-0 z-10">
                       <tr className="text-left text-slate-600">
                         <th className="p-2" style={{width:'2.2em'}}>#</th>
-                        <th className="p-2" style={{width:'12em'}}>이름</th>{/* ≈ 한글 6글자 */}
+                        <th className="p-2" style={{width:'12em'}}>이름</th>
                         <th className="p-2" style={{width:'6.5em'}}>성별</th>
                         <th className="p-2">상태</th>
                         <th className="p-2" style={{width:'6.5em'}}>이동</th>
@@ -525,7 +585,7 @@ export default function App() {
                                 value={s.name}
                                 onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, name:e.target.value}:x))}
                                 className="input input-sm truncate"
-                                style={{width:'12em'}} // 한글 6글자 정도
+                                style={{width:'12em'}}
                                 placeholder="이름"
                               />
                             </td>
