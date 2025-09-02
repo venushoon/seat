@@ -45,10 +45,10 @@ export default function App() {
   const [groups, setGroups] = useState<Group[]>(() =>
     Array.from({ length: 4 }, (_, i) => ({ id: gid(), name: `${i + 1}모둠`, students: [] }))
   )
-  const [groupCount, setGroupCount] = useState<number>(4)   // 2~8
-  const [minPerGroup, setMinPerGroup] = useState<number>(3) // 2~8
-  const [maxPerGroup, setMaxPerGroup] = useState<number>(4) // ≥ min, ≤8
-  const [mode, setMode] = useState<Mode>('성비균형')         // 성비균형 | 완전랜덤 | 남여섞기OFF
+  const [groupCount, setGroupCount] = useState<number>(4)
+  const [minPerGroup, setMinPerGroup] = useState<number>(3)
+  const [maxPerGroup, setMaxPerGroup] = useState<number>(4)
+  const [mode, setMode] = useState<Mode>('성비균형')
   const [filterUnplaced, setFilterUnplaced] = useState(false)
   const [bulk, setBulk] = useState('')
 
@@ -58,7 +58,7 @@ export default function App() {
   const [selA, setSelA] = useState(''), [selB, setSelB] = useState('')
   const [selA2, setSelA2] = useState(''), [selB2, setSelB2] = useState('')
 
-  // 로드/자동저장
+  // 로드/저장
   useEffect(() => {
     const saved = localStorage.getItem('seat-arranger:auto')
     if (saved) {
@@ -215,7 +215,6 @@ export default function App() {
       return true
     }
 
-    // === 남/여 섞지 않기: 남자 → 여자, 이후 남는 좌석 채움 ===
     if (mode === '남여섞기OFF') {
       const malePrefer:number[] = [], femalePrefer:number[] = [], empty:number[] = []
       nextGroups.forEach((g,i)=>{
@@ -229,29 +228,23 @@ export default function App() {
       const extraMaleNeeded = Math.max(0, Math.floor(males.length / minG) - baseMale.length)
       const chosenMale = baseMale.concat(empty.slice(0, extraMaleNeeded)).slice(0, gc)
 
-      // 남자 최소 충족
       for (let r=0;r<minG;r++){ for (const gi of chosenMale){ if (!males.length) break; if (put(gi, males[0])) males.shift() } }
-      // 남자 정원까지
       outerM: while (males.length){
         let moved=false
         for (const gi of chosenMale){ if (!males.length) break outerM; if (put(gi, males[0])){ males.shift(); moved=true } }
         if (!moved) break
       }
 
-      // 여자 후보 = 여그룹 + 남으로 선정되지 않은 빈그룹
       const usedMale = new Set(chosenMale)
       const femaleCands = femalePrefer.concat(empty.filter(i=>!usedMale.has(i)))
 
-      // 여자 최소
       for (let r=0;r<minG;r++){ for (const gi of femaleCands){ if (!females.length) break; if (put(gi, females[0])) females.shift() } }
-      // 여자 정원까지
       outerF: while (females.length){
         let moved=false
         for (const gi of femaleCands){ if (!females.length) break outerF; if (put(gi, females[0])){ females.shift(); moved=true } }
         if (!moved) break
       }
 
-      // === 남는 좌석 자동 채움(성별 규칙 준수) ===
       const fillRest = (que: Student[]) => {
         if (!que.length) return
         for (const gi of order) {
@@ -260,10 +253,7 @@ export default function App() {
           }
         }
       }
-      // 남은 남/여 먼저
-      fillRest(males); fillRest(females)
-      // 미정은 규칙상 못 들어갈 수 있으므로 시도만 하고 남으면 미배치
-      fillRest(others)
+      fillRest(males); fillRest(females); fillRest(others) // others는 규칙상 대부분 불가지만 시도
 
     } else if (mode === '성비균형') {
       const totalPool = males.length + females.length + others.length
@@ -286,7 +276,6 @@ export default function App() {
           if (put(gi, st)) { if (st.gender==='여') females.shift(); else others.shift() } else break
         }
       }
-      // 남는 좌석 있으면 남은 학생으로 정원까지 채우기
       const rest = [...males, ...females, ...others]
       for (const gi of order) {
         while (rest.length && nextGroups[gi].students.length < Math.min(targets[gi], maxG)) {
@@ -295,7 +284,6 @@ export default function App() {
         }
       }
     } else {
-      // 완전랜덤 + 좌석 남으면 끝까지 채움
       let all = shuffleArray([...males, ...females, ...others])
       for (const gi of order) {
         while (nextGroups[gi].students.length < Math.min(targets[gi], maxG) && all.length) {
@@ -303,7 +291,6 @@ export default function App() {
           if (put(gi, st)) all.shift(); else break
         }
       }
-      // 남는 좌석이 더 있으면 반복 한 번 더 시도
       let again = true
       while (again) {
         again = false
@@ -472,19 +459,22 @@ export default function App() {
                 </div>
               </section>
 
-              {/* 데이터 & 출력 (아주 작게) */}
-              <section className="card p-4 text-xs">
-                <div className="flex items-center gap-2 mb-2"><span className="chip chip-emerald"></span><h2 className="section-title text-[.95rem]">데이터 & 출력</h2></div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={saveAs} className="btn btn-xs"><Save className="icon-left" />저장</button>
-                  <button onClick={loadFrom} className="btn btn-xs"><Upload className="icon-left" />불러오기</button>
-                  <button onClick={exportCSV} className="btn btn-xs"><Download className="icon-left" />CSV</button>
-                  <button onClick={exportJSON} className="btn btn-xs"><Download className="icon-left" />JSON</button>
-                  <label className="btn btn-xs cursor-pointer col-span-2">
-                    <Import className="icon-left" />JSON 불러오기
+              {/* 데이터 & 출력 – 초소형 3×2 */}
+              <section className="card p-4 text-[.8rem]">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="chip chip-emerald"></span>
+                  <h2 className="section-title text-[.9rem]">데이터 & 출력</h2>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  <button onClick={saveAs} className="btn btn-xxs"><Save className="icon-left icon-xs" />저장</button>
+                  <button onClick={loadFrom} className="btn btn-xxs"><Upload className="icon-left icon-xs" />불러오기</button>
+                  <button onClick={exportCSV} className="btn btn-xxs"><Download className="icon-left icon-xs" />CSV</button>
+                  <button onClick={exportJSON} className="btn btn-xxs"><Download className="icon-left icon-xs" />JSON</button>
+                  <label className="btn btn-xxs cursor-pointer">
+                    <Import className="icon-left icon-xs" />JSON
                     <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={importJSON}/>
                   </label>
-                  <button onClick={()=>window.print()} className="btn btn-xs col-span-2"><Printer className="icon-left" />인쇄</button>
+                  <button onClick={()=>window.print()} className="btn btn-xxs"><Printer className="icon-left icon-xs" />인쇄</button>
                 </div>
               </section>
             </div>
@@ -515,12 +505,12 @@ export default function App() {
                   <table className="w-full text-[0.88rem]">
                     <thead className="bg-slate-50 sticky top-0 z-10">
                       <tr className="text-left text-slate-600">
-                        <th className="p-2 w-7">#</th>
-                        <th className="p-2 w-[45%]">이름</th>
-                        <th className="p-2 w-24">성별</th>
-                        <th className="p-2 w-[28%]">상태</th>
-                        <th className="p-2 w-20">이동</th>
-                        <th className="p-2 w-20"></th>
+                        <th className="p-2" style={{width:'2.2em'}}>#</th>
+                        <th className="p-2" style={{width:'12em'}}>이름</th>{/* ≈ 한글 6글자 */}
+                        <th className="p-2" style={{width:'6.5em'}}>성별</th>
+                        <th className="p-2">상태</th>
+                        <th className="p-2" style={{width:'6.5em'}}>이동</th>
+                        <th className="p-2" style={{width:'6.5em'}}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -531,7 +521,13 @@ export default function App() {
                           <tr key={s.id} className={`border-t ${placed ? 'bg-indigo-50/35' : ''}`}>
                             <td className="p-2 text-slate-500">{i + 1}</td>
                             <td className="p-2">
-                              <input value={s.name} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, name:e.target.value}:x))} className="input input-sm truncate" placeholder="이름" />
+                              <input
+                                value={s.name}
+                                onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, name:e.target.value}:x))}
+                                className="input input-sm truncate"
+                                style={{width:'12em'}} // 한글 6글자 정도
+                                placeholder="이름"
+                              />
                             </td>
                             <td className="p-2">
                               <select value={s.gender} onChange={(e)=>setStudents(prev=>prev.map(x=>x.id===s.id?{...x, gender:e.target.value as Gender}:x))} className="input input-sm">
@@ -617,10 +613,12 @@ export default function App() {
           .btn{ display:inline-flex; align-items:center; gap:.45rem; padding:.55rem .85rem; border-radius:.8rem; border:1px solid rgb(226,232,240); background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.05); font-weight:600; font-size:.93rem; color:#0f172a; }
           .btn-sm{ padding:.45rem .7rem; font-size:.9rem; border-radius:.7rem; }
           .btn-xs{ padding:.3rem .5rem; font-size:.78rem; border-radius:.6rem; }
+          .btn-xxs{ padding:.25rem .45rem; font-size:.72rem; border-radius:.5rem; }
           .btn-primary{ display:inline-flex; align-items:center; gap:.45rem; padding:.6rem .95rem; border-radius:.9rem; background:var(--blue); color:#fff; font-weight:700; }
           .btn-ghost{ display:inline-flex; align-items:center; gap:.45rem; padding:.55rem .85rem; border-radius:.9rem; color:#334155; background:transparent; border:1px solid rgba(148,163,184,.35); }
           .btn-accent{ display:inline-flex; align-items:center; justify-content:center; gap:.45rem; padding:.55rem .85rem; border-radius:1rem; font-weight:800; background:linear-gradient(135deg,#34d399,#10b981); color:white; border:1px solid #a7f3d0; box-shadow:0 6px 14px -6px rgba(16,185,129,.4); }
           .icon-left{ width:.95rem; height:.95rem; margin-right:.05rem; }
+          .icon-xs{ width:.85rem; height:.85rem; }
           .input{ width:100%; padding:.48rem .68rem; border:1px solid rgb(226,232,240); border-radius:.7rem; background:#fff; }
           .input-sm{ padding:.38rem .55rem; border-radius:.6rem; font-size:.9rem; }
           .input-xxs{ width:auto; padding:.18rem .32rem; border:1px solid rgb(226,232,240); border-radius:.5rem; background:#fff; font-size:.72rem; }
@@ -641,7 +639,7 @@ export default function App() {
             header, .print\\:hidden { display:none !important; }
             body { background:white !important; }
             .card { box-shadow:none !important; border:none !important; }
-            .btn, .btn-primary, .btn-ghost, .btn-accent, .btn-sm, .btn-xs,
+            .btn, .btn-primary, .btn-ghost, .btn-accent, .btn-sm, .btn-xs, .btn-xxs,
             .input, .input-xxs, .input-sm, textarea, select, label { display:none !important; }
           }
         `}</style>
