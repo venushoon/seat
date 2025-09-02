@@ -15,7 +15,6 @@ type Pair = { aId: string; bId: string }
 const gid = () => Math.random().toString(36).slice(2, 9)
 const shuffleArray = <T,>(arr: T[]) => { const a=[...arr]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]} return a }
 
-// 붙여넣기/CSV 파서
 const parseBulk = (text:string):Student[] =>
   text.split(/\n|,/).map(s=>s.trim()).filter(Boolean).map(line=>{
     const m=line.match(/([^/\s,|]+)[/\s,|]*(남|여)?/)
@@ -57,6 +56,7 @@ function hamiltonRound(values:number[], total:number){
 }
 
 export default function App(){
+  // students = 전체 명단(로스터). 그룹 배치/해제되어도 삭제하지 않음.
   const [students,setStudents]=useState<Student[]>([])
   const [groups,setGroups]=useState<Group[]>(Array.from({length:4},(_,i)=>({id:gid(), name:`${i+1}모둠`, students:[]})))
   const [groupCount,setGroupCount]=useState(4)
@@ -74,7 +74,7 @@ export default function App(){
   const jsonInputRef=useRef<HTMLInputElement>(null)
   const csvInputRef=useRef<HTMLInputElement>(null)
 
-  // 자동 저장/복원
+  // 저장/복원
   useEffect(()=>{ const saved=localStorage.getItem('seat-arranger:auto'); if(saved){ try{
     const p=JSON.parse(saved)
     setStudents(p.students||[]); setGroups(p.groups||[])
@@ -83,15 +83,13 @@ export default function App(){
   }catch{}}},[])
   useEffect(()=>{ const payload={students,groups,groupCount,minPerGroup,maxPerGroup,mode,friendPairs,antiPairs}; localStorage.setItem('seat-arranger:auto', JSON.stringify(payload))},[students,groups,groupCount,minPerGroup,maxPerGroup,mode,friendPairs,antiPairs])
 
-  // 모둠 수 증감 시 동기화
+  // 모둠 수 동기화 (그룹 줄일 때도 students를 건드리지 않음)
   useEffect(()=>{ setGroups(prev=>{
     const arr=[...prev]
     if(groupCount>prev.length){
       for(let i=prev.length;i<groupCount;i++) arr.push({id:gid(), name:`${i+1}모둠`, students:[]})
     }else if(groupCount<prev.length){
-      const removed=arr.splice(groupCount)
-      const back=removed.flatMap(g=>g.students)
-      if(back.length) setStudents(s=>dedupeById([...s, ...back.map(st=>({...st,locked:false}))]))
+      arr.splice(groupCount) // 제거된 그룹의 학생들은 미배치로 간주 (students는 그대로)
     }
     return arr.map((g,i)=>({...g,name:`${i+1}모둠`}))
   })},[groupCount])
@@ -104,22 +102,11 @@ export default function App(){
   const groupNameOf=(id:string)=> (findGroupIdxOf(id)>=0? groups[findGroupIdxOf(id)].name : '')
   const nameOf=(id:string)=>students.find(s=>s.id===id)?.name||groups.flatMap(g=>g.students).find(s=>s.id===id)?.name||'(이름)'
 
-  const dedupeById = (arr:Student[]) => {
-    const seen = new Set<string>()
-    const out:Student[]=[]
-    for(const s of arr){
-      if(seen.has(s.id)) continue
-      seen.add(s.id); out.push(s)
-    }
-    return out
-  }
   const addRow=()=>setStudents(s=>[...s,{id:gid(),name:'',gender:'미정',locked:false}])
 
-  // 초기화 → 모든 학생 미배치로 복귀
+  // 초기화 → 그룹만 비우고 전체 명단은 유지
   const clearAll=()=>{ 
-    if(!confirm('모든 모둠 배치를 해제하고 학생들을 미배치 목록으로 되돌립니다.')) return
-    const back = groups.flatMap(g=>g.students).map(st=>({...st, locked:false}))
-    setStudents(prev=>dedupeById([...prev, ...back]))
+    if(!confirm('모든 모둠 배치를 해제하고 학생들을 미배치로 되돌립니다.')) return
     setGroups(gs=>gs.map(g=>({...g,students:[]})))
   }
 
@@ -132,20 +119,13 @@ export default function App(){
     setGroups(gs=>gs.map(g=>({...g,students:g.students.map(x=>x.id===id?{...x,locked:!x.locked}:x)})))
   }
 
-  // ✅ 견고한 미배치 이동 (학생 목록에서 사라짐 방지)
+  // 미배치 이동 → 그룹에서만 제거 (students는 건드리지 않음)
   const moveOut = (id: string) => {
-    const current = groups.flatMap(g => g.students).find(s => s.id === id)
-    if (!current) return
     setGroups(gs => gs.map(g => ({ ...g, students: g.students.filter(s => s.id !== id) })))
-    setStudents(prev => {
-      const without = prev.filter(p => p.id !== id)
-      return [...without, { ...current, locked: false }]
-    })
   }
 
   const applyBulk=()=>{ const parsed=parseBulk(bulk); if(!parsed.length) return; setStudents(s=>[...s,...parsed]); setBulk('') }
 
-  // 성별/제약 검사
   const groupGenderOf=(g:Group):Gender|'혼합'|'비어있음'=>{
     if(!g.students.length) return '비어있음'
     const set=new Set(g.students.map(s=>s.gender))
@@ -169,7 +149,6 @@ export default function App(){
   function assignToGroup(stuId:string, gidx:number){
     const st = students.find(s=>s.id===stuId) || groups.flatMap(g=>g.students).find(s=>s.id===stuId)
     if(!st) return false
-    const inStudents=students.some(s=>s.id===stuId)
     let added=false
     setGroups(prev=>{
       if(gidx<0||gidx>=prev.length) return prev
@@ -184,28 +163,28 @@ export default function App(){
       added=true
       return stripped
     })
-    if(inStudents && added) setStudents(ss=>ss.filter(x=>x.id!==stuId))
     return added
   }
 
-  // 드래그 앤 드롭
   const startDrag=(id:string)=>(e:React.DragEvent)=>{ e.dataTransfer.setData('text/plain',id) }
   const onDropToGroup=(gidx:number)=>(e:React.DragEvent)=>{ e.preventDefault(); const id=e.dataTransfer.getData('text/plain'); if(id) assignToGroup(id,gidx) }
 
-  // 자동 편성 로직
+  // 자동 편성 (로스터 students를 그대로 사용)
   function arrange(){
     const gc=Math.max(2,Math.min(8,groupCount))
     const minG=Math.max(2,Math.min(8,minPerGroup))
     const maxG=Math.max(minG,Math.min(8,maxPerGroup))
-    const totalPool = students.length + groups.flatMap(g=>g.students.filter(s=>!s.locked)).length
-    if(totalPool<minG*gc){ alert(`학생 수가 부족합니다. 최소 ${gc}×${minG} = ${minG*gc}명 필요`); return }
 
     const pool:Student[]=[]
     const nextGroups:Group[]=groups.slice(0,gc).map(g=>({
       ...g,
-      students:g.students.filter(s=>{ if(s.locked) return true; pool.push(s); return false })
+      students:g.students.filter(s=>s.locked) // 잠긴 학생만 남기고
     }))
-    pool.push(...students)
+    // 잠기지 않은 학생 + 현재 미배치 학생을 풀에 넣음
+    groups.forEach(g=>g.students.forEach(s=>{ if(!s.locked) pool.push(s) }))
+    students.forEach(s=>{
+      if(!nextGroups.some(g=>g.students.some(x=>x.id===s.id))) pool.push(s)
+    })
 
     const lockedCounts=nextGroups.map(g=>g.students.length)
     const base=lockedCounts.map(c=>Math.max(minG,c))
@@ -307,7 +286,7 @@ export default function App(){
       tryPlaceRoundRobin(all)
     }
 
-    // 잔여 균등화(최소/최대 및 잠금 고려)
+    // 잔여 균등화
     const lockedCount = nextGroups.map(g => g.students.filter(s=>s.locked).length)
     let movedSomething = true, safety=0
     while (movedSomething && safety < 200) {
@@ -340,10 +319,7 @@ export default function App(){
       }
     }
 
-    const placedAfter=new Set(nextGroups.flatMap(g=>g.students.map(s=>s.id)))
-    const remain = pool.filter(s=>!placedAfter.has(s.id) && !s.locked)
     setGroups(nextGroups)
-    setStudents(remain)
   }
 
   // 저장/불러오기/출력
@@ -447,11 +423,11 @@ export default function App(){
                 </div>
               </section>
 
-              {/* 제약 (친구/떼기) */}
+              {/* 제약 */}
               <section className="card p-4">
                 <div className="flex items-center gap-2 mb-2"><span className="chip chip-purple"></span><h2 className="section-title">제약 (친구/떼기)</h2></div>
 
-                {/* 친구: 셀렉트 2개 + 추가 버튼 오른쪽 */}
+                {/* 친구 */}
                 <div className="mb-2">
                   <div className="text-[.82rem] font-semibold text-slate-700 mb-1">친구(같이 배치)</div>
                   <div className="grid grid-cols-[1fr,1fr,auto] gap-2">
@@ -480,7 +456,7 @@ export default function App(){
 
                 <hr className="my-3 border-slate-200"/>
 
-                {/* 떼기: 셀렉트 2개 + 추가 버튼 오른쪽 */}
+                {/* 떼기 */}
                 <div>
                   <div className="text-[.82rem] font-semibold text-slate-700 mb-1">떼기(같은 모둠 금지)</div>
                   <div className="grid grid-cols-[1fr,1fr,auto] gap-2">
@@ -551,7 +527,7 @@ export default function App(){
               </div>
 
               <div className="rounded-xl border overflow-hidden">
-                <div className="max-h=[300px] md:max-h-[300px] overflow-auto">
+                <div className="max-h-[300px] overflow-auto">
                   <table className="w-full text-[0.88rem]">
                     <thead className="bg-slate-50 sticky top-0 z-10">
                       <tr className="text-left text-slate-600">
