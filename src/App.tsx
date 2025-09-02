@@ -45,7 +45,7 @@ function parseCSV(text:string):Student[] {
   return out
 }
 
-// 해밀턴 배분: floors를 시작값으로 하고 남은 수를 소수부 큰 순으로 배분(상한 cap 반영)
+// 해밀턴 배분(소수부 큰 순)
 function hamiltonDistribute(bases:number[], ideals:number[], caps:number[], total:number){
   const floors = ideals.map((v,i)=>Math.max(bases[i], Math.min(caps[i], Math.floor(v))))
   let sum = floors.reduce((a,b)=>a+b,0)
@@ -176,8 +176,7 @@ export default function App(){
     const room=base.map((b,i)=>Math.max(0, cap[i]-b))
     const movable=Math.min(pool.length, room.reduce((a,b)=>a+b,0))
     const extras=Array(gc).fill(0)
-    // 균등 +1 배분
-    for(let r=0;r<movable;r++){ extras[r%gc]++ }
+    for(let r=0;r<movable;r++){ extras[r%gc]++ } // 균등 +1
     const t = base.map((b,i)=>Math.min(cap[i], b+extras[i]))
 
     const males = shuffleArray(pool.filter(s=>s.gender==='남'))
@@ -188,66 +187,39 @@ export default function App(){
     const lf = nextGroups.map(g=>g.students.filter(s=>s.gender==='여').length)
     const current = nextGroups.map(g=>g.students.length)
 
-    const totalMaleLocked = lm.reduce((a,b)=>a+b,0)
-    const totalFemaleLocked = lf.reduce((a,b)=>a+b,0)
-
-    const totalOpen = t.reduce((a,b)=>a+b,0) - current.reduce((a,b)=>a+b,0)
-    const totalMaleAvail = totalMaleLocked + males.length
-    const totalFemaleAvail = totalFemaleLocked + females.length
-
-    // 전체 남자 비율
-    const rosterM = students.filter(s=>s.gender==='남').length + nextGroups.flatMap(g=>g.students).filter(s=>s.gender==='남').length
-    const rosterF = students.filter(s=>s.gender==='여').length + nextGroups.flatMap(g=>g.students).filter(s=>s.gender==='여').length
-    const maleRatio = (rosterM + 0.0001) / Math.max(1, rosterM + rosterF + 0.0002)
-
-    // 그룹별 남자 목표의 "연속값" (이상적 비율)
-    const idealMale = t.map((ti,i)=>ti * maleRatio)
-
-    // 각 그룹별 남자 최소/최대 허용(잠금 고려)
-    const minMale = t.map((ti,i)=>Math.min(ti, lm[i])) // 최소는 잠겨있는 남자수 이상
-    const maxMale = t.map((ti,i)=>Math.max(0, ti - lf[i])) // 여 잠금 때문에 남자 최대치 제한
-
-    // 해밀턴: bases=minMale, ideals=clamped ideal, caps=maxMale, total=전체 남자 사용 가능 수
-    const clampedIdeals = idealMale.map((v,i)=>Math.max(minMale[i], Math.min(maxMale[i], v)))
-    const maleGoal = hamiltonDistribute(minMale, clampedIdeals, maxMale, Math.min(totalMaleAvail, t.reduce((a,b)=>a+b,0)))
-
-    // 여자 목표는 t - 남자 목표 (미정/여러 제약으로 다 못 채우면 나중에 라운드로빈)
-    const femaleGoal = t.map((ti,i)=>Math.max(0, ti - maleGoal[i]))
-
-    // 제약 체크 함수
+    // 친구/떼기 빠른 조회
     const friendMap = new Map<string,string[]>()
     friendPairs.forEach(p=>{
       friendMap.set(p.aId,[...(friendMap.get(p.aId)||[]), p.bId])
       friendMap.set(p.bId,[...(friendMap.get(p.bId)||[]), p.aId])
     })
-    const canPut=(i:number, st:Student)=> nextGroups[i].students.length<t[i] && nextGroups[i].students.length<cap[i] && (!hasAntiWith(nextGroups[i], st)) && (mode!=='남여섞기OFF' || (st.gender!=='미정' && (groupGenderOf(nextGroups[i])==='비어있음' || groupGenderOf(nextGroups[i])===st.gender)))
-    const put=(i:number, st:Student)=>{ if(!canPut(i,st)) return false; nextGroups[i]={...nextGroups[i],students:[...nextGroups[i].students,st]}; return true }
+    const canPut=(i:number, st:Student, limit:number)=> nextGroups[i].students.length<limit && !hasAntiWith(nextGroups[i], st) && (mode!=='남여섞기OFF' || (st.gender!=='미정' && (groupGenderOf(nextGroups[i])==='비어있음' || groupGenderOf(nextGroups[i])===st.gender)))
+    const put=(i:number, st:Student, limit:number)=>{ if(!canPut(i,st,limit)) return false; nextGroups[i]={...nextGroups[i],students:[...nextGroups[i].students,st]}; return true }
 
-    // 배치 유틸: 목표수 채우기 (친구 우선, 실패 시 순차 탐색)
-    const placeToGoals = (arr:Student[], goal:number[], gender:Gender) => {
-      const order = shuffleArray(Array.from({length:gc},(_,i)=>i))
+    // 목표 채우기 유틸 (특정 그룹 집합에만)
+    const placeToGoals = (arr:Student[], goal:number[], gender:Gender, allowed:boolean[]) => {
+      const order = shuffleArray(Array.from({length:gc},(_,i)=>i)).filter(i=>allowed[i])
       // 친구 먼저
-      for(let gi of order){
+      for(const gi of order){
         while(goal[gi] > nextGroups[gi].students.filter(s=>s.gender===gender).length && arr.length){
-          // 친구 있는 후보 찾기
-          const idx = arr.findIndex(st => (friendMap.get(st.id)||[]).some(fid => nextGroups[gi].students.some(s=>s.id===fid)) && canPut(gi, st))
+          const idx = arr.findIndex(st => (friendMap.get(st.id)||[]).some(fid => nextGroups[gi].students.some(s=>s.id===fid)) && canPut(gi, st, t[gi]))
           if(idx<0) break
           const st = arr.splice(idx,1)[0]
-          if(!put(gi, st)) { /* 못넣으면 버림 */ }
+          put(gi, st, t[gi])
         }
       }
-      // 남은 인원 채우기
+      // 일반 채우기
       let safety=0
       while(arr.length && safety<2000){
         safety++
         let progressed=false
-        for(let gi of order){
+        for(const gi of order){
           const need = goal[gi] - nextGroups[gi].students.filter(s=>s.gender===gender).length
           if(need<=0) continue
-          const idx = arr.findIndex(st => canPut(gi, st))
+          const idx = arr.findIndex(st => canPut(gi, st, t[gi]))
           if(idx>=0){
             const st = arr.splice(idx,1)[0]
-            if(put(gi, st)) progressed=true
+            if(put(gi, st, t[gi])) progressed=true
           }
         }
         if(!progressed) break
@@ -255,20 +227,76 @@ export default function App(){
     }
 
     if(mode==='남여섞기OFF'){
-      // 기존 분리 로직 유지(요청 사항)
-      const maleTargets:number[]=[], femaleTargets:number[]=[]
+      // 1) 혼합 잠금(남/여가 동시에 잠겨 있는 그룹)은 OFF 모드에서는 확장 금지
+      const hardLocked = Array(gc).fill(false)
       for(let i=0;i<gc;i++){
-        // 남/여 전용 목표: 남자 우선으로 채우고, 남자 부족 시 여성 그룹이 가져갈 수 있게 함
-        maleTargets[i]=Math.min(t[i], Math.max(lm[i], t[i]-lf[i]))
-        femaleTargets[i]=Math.max(0, t[i]-maleTargets[i])
+        if(lm[i]>0 && lf[i]>0){ hardLocked[i]=true; t[i]=current[i] } // 더 이상 추가 금지
       }
-      placeToGoals(males, maleTargets, '남')
-      placeToGoals(females, femaleTargets, '여')
-    } else if(mode==='성비균형'){
-      // ✅ 새 성비균형 로직: 남자 목표/여자 목표를 정확히 정수화 후 그 목표를 채움
-      placeToGoals(males, maleGoal, '남')
-      placeToGoals(females, femaleGoal, '여')
+
+      // 2) 전용 그룹 지정: 남자/여자 필수, 나머지 빈 그룹을 남/여로 배정
+      const maleOnly = Array(gc).fill(false)
+      const femaleOnly = Array(gc).fill(false)
+
+      for(let i=0;i<gc;i++){
+        if(hardLocked[i]) continue
+        if(lm[i]>0 && lf[i]===0) maleOnly[i]=true
+        else if(lf[i]>0 && lm[i]===0) femaleOnly[i]=true
+      }
+
+      const emptyIdx = Array.from({length:gc},(_,i)=>i).filter(i=>!hardLocked[i] && !maleOnly[i] && !femaleOnly[i])
+      // 남/여 필요한 좌석(잠금 제외)
+      let maleRemain = males.length - maleOnly.reduce((a,i,idx)=> a + (i? Math.max(0, t[idx]-lm[idx]) : 0), 0)
+      let femaleRemain = females.length - femaleOnly.reduce((a,i,idx)=> a + (i? Math.max(0, t[idx]-lf[idx]) : 0), 0)
+
+      // 3) 빈 그룹을 큰 용량부터 남/여 쪽에 할당(필요 많은 쪽 우선)
+      emptyIdx.sort((a,b)=> (t[b]-current[b]) - (t[a]-current[a]))
+      for(const i of emptyIdx){
+        if(maleRemain>femaleRemain){ maleOnly[i]=true; maleRemain -= Math.max(0, t[i]-lm[i]) }
+        else { femaleOnly[i]=true; femaleRemain -= Math.max(0, t[i]-lf[i]) }
+      }
+
+      // 4) 목표 설정(전용 그룹은 해당 성별 목표= t[i], 반대 성별=0)
+      const maleGoal = t.map((ti,i)=> hardLocked[i]? lm[i] : (maleOnly[i]? ti : 0))
+      const femaleGoal = t.map((ti,i)=> hardLocked[i]? lf[i] : (femaleOnly[i]? ti : 0))
+
+      // 5) 전용 그룹에만 배치
+      placeToGoals(males, maleGoal, '남', maleOnly.map((v,i)=>v && !hardLocked[i]))
+      placeToGoals(females, femaleGoal, '여', femaleOnly.map((v,i)=>v && !hardLocked[i]))
+
+      // 6) OFF 모드에서는 '미정'은 배치하지 않고 미배치로 남김(요청 정책)
+    }
+    else if(mode==='성비균형'){
+      // --- 성비균형: 잠금/최소/상한을 고려한 정수 목표 ---
+      const rosterM = students.filter(s=>s.gender==='남').length + nextGroups.flatMap(g=>g.students).filter(s=>s.gender==='남').length
+      const rosterF = students.filter(s=>s.gender==='여').length + nextGroups.flatMap(g=>g.students).filter(s=>s.gender==='여').length
+      const maleRatio = (rosterM + 0.0001) / Math.max(1, rosterM + rosterF + 0.0002)
+
+      const idealMale = t.map((ti)=>ti * maleRatio)
+      const minMale = t.map((ti,i)=>Math.min(ti, lm[i]))
+      const maxMale = t.map((ti,i)=>Math.max(0, ti - lf[i]))
+
+      const clampedIdeals = idealMale.map((v,i)=>Math.max(minMale[i], Math.min(maxMale[i], v)))
+      const maleGoal = hamiltonDistribute(minMale, clampedIdeals, maxMale, Math.min(lm.reduce((a,b)=>a+b,0)+males.length, t.reduce((a,b)=>a+b,0)))
+      const femaleGoal = t.map((ti,i)=>Math.max(0, ti - maleGoal[i]))
+
+      // 배치
+      const allowAll = Array(gc).fill(true)
+      const placeToGoalsBalanced = (arr:Student[], goal:number[], gender:Gender) => placeToGoals(arr, goal, gender, allowAll)
+      placeToGoalsBalanced(males, maleGoal, '남')
+      placeToGoalsBalanced(females, femaleGoal, '여')
+
+      // 남은(미정 포함) 라운드로빈
+      const left=[...males,...females,...others]
+      const order=shuffleArray(Array.from({length:gc},(_,i)=>i))
+      let idx=0, safe=0
+      while(left.length && safe<5000){
+        safe++
+        const gi=order[idx%gc]
+        const st=left.shift()!
+        if(nextGroups[gi].students.length<t[gi] && !hasAntiWith(nextGroups[gi], st)) { nextGroups[gi]={...nextGroups[gi],students:[...nextGroups[gi].students, st]}; idx++ }
+      }
     } else {
+      // 완전 랜덤
       const all=shuffleArray([...males,...females,...others])
       const order = shuffleArray(Array.from({length:gc},(_,i)=>i))
       let idx=0, safety=0
@@ -276,21 +304,8 @@ export default function App(){
         safety++
         const gi=order[idx%gc]
         const st=all.shift()!
-        if(put(gi,st)) idx++
+        if(nextGroups[gi].students.length<t[gi] && !hasAntiWith(nextGroups[gi], st)) { nextGroups[gi]={...nextGroups[gi],students:[...nextGroups[gi].students,st]}; idx++ }
       }
-    }
-
-    // 남은 인원(미정 포함) 라운드로빈
-    const left = [
-      ...males, ...females, ...others
-    ]
-    const order2 = shuffleArray(Array.from({length:gc},(_,i)=>i))
-    let k=0, safe=0
-    while(left.length && safe<5000){
-      safe++
-      const gi = order2[k%gc]
-      const st = left.shift()!
-      if(put(gi,st)) k++
     }
 
     setGroups(nextGroups)
