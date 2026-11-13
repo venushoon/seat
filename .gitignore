@@ -1,0 +1,26 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# build output
+dist
+dist-ssr
+
+# logs
+*.log
+
+# env
+.env
+.env.local
+
+# backups
+*.bak
+*.orig
+*_bak.tsx
+*_bak.ts
+
+# editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
